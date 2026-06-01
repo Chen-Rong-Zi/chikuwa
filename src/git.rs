@@ -2,6 +2,7 @@ use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::time::Instant;
 
+use serde::{Deserialize, Serialize};
 use tokio::process::Command;
 
 #[derive(Debug, Clone)]
@@ -13,7 +14,7 @@ pub struct GitInfo {
     pub worktree_name: Option<String>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PrInfo {
     pub number: u32,
     pub title: String,
@@ -43,58 +44,101 @@ impl GitInfoCache {
     }
 
     /// Get git info for a path, using cached values when fresh enough.
+    /// Fetches all git data in parallel for optimal performance.
     pub async fn get(&mut self, path: &str) -> Option<GitInfo> {
         let path_buf = PathBuf::from(path);
         let now = Instant::now();
 
         if let Some(entry) = self.entries.get_mut(&path_buf) {
-            // Refresh branch if stale
-            if now.duration_since(entry.branch_fetched_at).as_secs() >= BRANCH_TTL_SECS {
-                entry.git_info.branch = fetch_branch(path).await;
+            // Determine what needs refresh
+            let need_branch =
+                now.duration_since(entry.branch_fetched_at).as_secs() >= BRANCH_TTL_SECS;
+            let need_pr = now.duration_since(entry.pr_fetched_at).as_secs() >= PR_TTL_SECS;
+            let need_repo = !entry.repo_name_fetched;
+            let need_toplevel = !entry.toplevel_fetched;
+            let need_worktree = !entry.worktree_fetched;
+
+            // Fetch all needed data in parallel
+            let (branch_res, pr_res, repo_res, toplevel_res, worktree_res) = tokio::join!(
+                async {
+                    if need_branch {
+                        fetch_branch(path).await
+                    } else {
+                        None
+                    }
+                },
+                async {
+                    if need_pr {
+                        if let Some(ref branch) = entry.git_info.branch {
+                            fetch_pr(path, branch).await
+                        } else {
+                            None
+                        }
+                    } else {
+                        None
+                    }
+                },
+                async {
+                    if need_repo {
+                        fetch_repo_name(path).await
+                    } else {
+                        None
+                    }
+                },
+                async {
+                    if need_toplevel {
+                        fetch_toplevel(path).await
+                    } else {
+                        None
+                    }
+                },
+                async {
+                    if need_worktree {
+                        fetch_worktree_name(path).await
+                    } else {
+                        None
+                    }
+                },
+            );
+
+            // Update entry with fetched values
+            if let Some(branch) = branch_res {
+                entry.git_info.branch = Some(branch);
                 entry.branch_fetched_at = now;
             }
-
-            // Refresh PR if stale (and we have a branch)
-            if now.duration_since(entry.pr_fetched_at).as_secs() >= PR_TTL_SECS {
-                if let Some(ref branch) = entry.git_info.branch {
-                    entry.git_info.pr = fetch_pr(path, branch).await;
-                } else {
-                    entry.git_info.pr = None;
-                }
+            if need_pr {
+                entry.git_info.pr = pr_res;
                 entry.pr_fetched_at = now;
             }
-
-            // Repo name is fetched once and cached
-            if !entry.repo_name_fetched {
-                entry.git_info.repo_name = fetch_repo_name(path).await;
+            if let Some(repo) = repo_res {
+                entry.git_info.repo_name = Some(repo);
                 entry.repo_name_fetched = true;
             }
-
-            // Toplevel is fetched once and cached
-            if !entry.toplevel_fetched {
-                entry.git_info.toplevel = fetch_toplevel(path).await;
+            if let Some(toplevel) = toplevel_res {
+                entry.git_info.toplevel = Some(toplevel);
                 entry.toplevel_fetched = true;
             }
-
-            // Worktree name is fetched once and cached
-            if !entry.worktree_fetched {
-                entry.git_info.worktree_name = fetch_worktree_name(path).await;
+            if let Some(worktree) = worktree_res {
+                entry.git_info.worktree_name = Some(worktree);
                 entry.worktree_fetched = true;
             }
 
             return Some(entry.git_info.clone());
         }
 
-        // No cache entry — fetch fresh
-        let branch = fetch_branch(path).await;
+        // No cache entry — fetch all in parallel
+        let (branch, repo_name, toplevel, worktree_name) = tokio::join!(
+            fetch_branch(path),
+            fetch_repo_name(path),
+            fetch_toplevel(path),
+            fetch_worktree_name(path),
+        );
+        // PR fetch depends on branch, so fetch after
         let pr = if let Some(ref b) = branch {
             fetch_pr(path, b).await
         } else {
             None
         };
-        let repo_name = fetch_repo_name(path).await;
-        let toplevel = fetch_toplevel(path).await;
-        let worktree_name = fetch_worktree_name(path).await;
 
         let git_info = GitInfo {
             branch,

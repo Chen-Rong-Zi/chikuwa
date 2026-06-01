@@ -4,6 +4,7 @@ mod event;
 mod git;
 mod hook;
 mod ipc;
+mod persist;
 mod tmux;
 mod ui;
 mod usage;
