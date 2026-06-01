@@ -977,17 +977,25 @@ async fn run_app(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Resul
                                 match event {
                                     "PreToolUse" => {
                                         let mut tools = existing.tools.clone();
-                                        tools.extend(state.tools.iter().cloned());
+                                        // Don't add "Agent" tool to main agent - it spawns subagents
+                                        for tool in &state.tools {
+                                            if tool.name != "Agent" {
+                                                tools.push(tool.clone());
+                                            }
+                                        }
                                         tools
                                     }
                                     "PostToolUse" | "PostToolUseFailure" => {
                                         let mut tools = existing.tools.clone();
                                         if let Some(removing) = state.tools.first() {
-                                            if let Some(pos) = tools.iter().position(|t| {
-                                                t.name == removing.name
-                                                    && t.detail == removing.detail
-                                            }) {
-                                                tools.remove(pos);
+                                            // Skip if removing Agent tool - it's not in the list
+                                            if removing.name != "Agent" {
+                                                if let Some(pos) = tools.iter().position(|t| {
+                                                    t.name == removing.name
+                                                        && t.detail == removing.detail
+                                                }) {
+                                                    tools.remove(pos);
+                                                }
                                             }
                                         }
                                         tools
