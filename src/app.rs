@@ -183,8 +183,8 @@ impl App {
             collapsed: HashSet::new(),
             should_quit: false,
             agent_states: persist::load_agent_states(),
-            subagent_states: HashMap::new(),
-            completed_subagent_counts: HashMap::new(),
+            subagent_states: persist::load_subagent_states(),
+            completed_subagent_counts: persist::load_completed_counts(),
             git_cache,
             anim_frame: 0,
             nvim_title_cache: HashMap::new(),
@@ -435,8 +435,21 @@ impl App {
                 .remove(&(pane_id.clone(), agent_id.clone()));
             *self
                 .completed_subagent_counts
-                .entry(pane_id)
+                .entry(pane_id.clone())
                 .or_insert(0) += 1;
+
+            // Persist ended state
+            let ended_info = SubagentInfo {
+                id: agent_id,
+                short_id: String::new(),
+                description: None,
+                state: SubagentStatus::Ended,
+                tools: Vec::new(),
+                updated_at: state.updated_at,
+            };
+            if let Err(e) = persist::append_subagent_state(&pane_id, &ended_info) {
+                eprintln!("Warning: failed to persist subagent state: {}", e);
+            }
             return;
         }
 
@@ -473,6 +486,11 @@ impl App {
                     }
                     _ => {}
                 }
+
+                // Persist the updated state
+                if let Err(e) = persist::append_subagent_state(&pane_id, info) {
+                    eprintln!("Warning: failed to persist subagent state: {}", e);
+                }
             }
             std::collections::hash_map::Entry::Vacant(e) => {
                 // New subagent - extract description from Task tool if available
@@ -488,6 +506,12 @@ impl App {
                 if let Some(tool) = state.tools.first() {
                     info.tools.push(tool.clone());
                 }
+
+                // Persist the new state
+                if let Err(e) = persist::append_subagent_state(&pane_id, &info) {
+                    eprintln!("Warning: failed to persist subagent state: {}", e);
+                }
+
                 e.insert(info);
             }
         }

@@ -3,6 +3,7 @@ use std::io::{BufRead, Write};
 use std::path::{Path, PathBuf};
 
 use crate::agent::state::{AgentState, AgentStatus};
+use crate::agent::{SubagentInfo, SubagentStatus};
 use crate::git::PrInfo;
 use crate::usage::Usage;
 
@@ -132,6 +133,114 @@ pub fn compact_agent_states_to(
 /// Compact agent states at the default path.
 pub fn compact_agent_states(states: &HashMap<String, AgentState>) -> anyhow::Result<()> {
     compact_agent_states_to(states, &agent_states_path())
+}
+
+// ---- Subagent persistence ----
+
+/// Path to the subagent states JSONL file.
+pub fn subagent_states_path() -> PathBuf {
+    state_dir().join("subagent_states.jsonl")
+}
+
+/// Serializable subagent state entry with pane_id.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+struct SubagentStateEntry {
+    pane_id: String,
+    subagent: SubagentInfo,
+}
+
+/// Append a subagent state to the JSONL log.
+pub fn append_subagent_state(pane_id: &str, subagent: &SubagentInfo) -> anyhow::Result<()> {
+    let path = subagent_states_path();
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    let entry = SubagentStateEntry {
+        pane_id: pane_id.to_string(),
+        subagent: subagent.clone(),
+    };
+    let mut file = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&path)?;
+    let mut json = serde_json::to_string(&entry)?;
+    json.push('\n');
+    file.write_all(json.as_bytes())?;
+    Ok(())
+}
+
+/// Load subagent states from JSONL, returning the last state per (pane, agent_id).
+pub fn load_subagent_states() -> HashMap<(String, String), SubagentInfo> {
+    let path = subagent_states_path();
+    let file = match std::fs::File::open(&path) {
+        Ok(f) => f,
+        Err(_) => return HashMap::new(),
+    };
+
+    let reader = std::io::BufReader::new(file);
+    let mut states: HashMap<(String, String), SubagentInfo> = HashMap::new();
+
+    for line in reader.lines() {
+        let line = match line {
+            Ok(l) => l,
+            Err(_) => continue,
+        };
+        let line = line.trim();
+        if line.is_empty() {
+            continue;
+        }
+        let entry: SubagentStateEntry = match serde_json::from_str(line) {
+            Ok(e) => e,
+            Err(_) => continue,
+        };
+
+        let key = (entry.pane_id, entry.subagent.id.clone());
+        let ts = entry.subagent.updated_at;
+
+        match states.get(&key) {
+            Some(existing) if existing.updated_at >= ts => {}
+            _ => {
+                states.insert(key, entry.subagent);
+            }
+        }
+    }
+
+    // Remove ended subagents
+    states.retain(|_, info| info.state != SubagentStatus::Ended);
+    states
+}
+
+/// Load completed subagent counts from the JSONL log.
+pub fn load_completed_counts() -> HashMap<String, u32> {
+    let path = subagent_states_path();
+    let file = match std::fs::File::open(&path) {
+        Ok(f) => f,
+        Err(_) => return HashMap::new(),
+    };
+
+    let reader = std::io::BufReader::new(file);
+    let mut counts: HashMap<String, u32> = HashMap::new();
+
+    for line in reader.lines() {
+        let line = match line {
+            Ok(l) => l,
+            Err(_) => continue,
+        };
+        let line = line.trim();
+        if line.is_empty() {
+            continue;
+        }
+        let entry: SubagentStateEntry = match serde_json::from_str(line) {
+            Ok(e) => e,
+            Err(_) => continue,
+        };
+
+        if entry.subagent.state == SubagentStatus::Ended {
+            *counts.entry(entry.pane_id).or_insert(0) += 1;
+        }
+    }
+
+    counts
 }
 
 // ---- Git cache persistence ----
