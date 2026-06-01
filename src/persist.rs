@@ -211,6 +211,7 @@ pub fn load_subagent_states() -> HashMap<(String, String), SubagentInfo> {
 }
 
 /// Load completed subagent counts from the JSONL log.
+/// Deduplicates by (pane_id, agent_id) to avoid counting the same subagent multiple times.
 pub fn load_completed_counts() -> HashMap<String, u32> {
     let path = subagent_states_path();
     let file = match std::fs::File::open(&path) {
@@ -220,6 +221,8 @@ pub fn load_completed_counts() -> HashMap<String, u32> {
 
     let reader = std::io::BufReader::new(file);
     let mut counts: HashMap<String, u32> = HashMap::new();
+    // Track which (pane_id, agent_id) pairs have already been counted
+    let mut counted: std::collections::HashSet<(String, String)> = std::collections::HashSet::new();
 
     for line in reader.lines() {
         let line = match line {
@@ -236,7 +239,11 @@ pub fn load_completed_counts() -> HashMap<String, u32> {
         };
 
         if entry.subagent.state == SubagentStatus::Ended {
-            *counts.entry(entry.pane_id).or_insert(0) += 1;
+            let key = (entry.pane_id.clone(), entry.subagent.id.clone());
+            if !counted.contains(&key) {
+                counted.insert(key);
+                *counts.entry(entry.pane_id).or_insert(0) += 1;
+            }
         }
     }
 

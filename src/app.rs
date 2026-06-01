@@ -453,12 +453,17 @@ impl App {
 
         // Handle subagent ended
         if state.state == AgentStatus::Ended {
-            self.subagent_states
-                .remove(&(pane_id.clone(), agent_id.clone()));
-            *self
-                .completed_subagent_counts
-                .entry(pane_id.clone())
-                .or_insert(0) += 1;
+            // Only increment completed count if subagent actually existed
+            let existed = self
+                .subagent_states
+                .remove(&(pane_id.clone(), agent_id.clone()))
+                .is_some();
+            if existed {
+                *self
+                    .completed_subagent_counts
+                    .entry(pane_id.clone())
+                    .or_insert(0) += 1;
+            }
 
             // Persist ended state
             let ended_info = SubagentInfo {
