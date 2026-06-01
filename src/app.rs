@@ -22,6 +22,7 @@ use ratatui::Terminal;
 use tokio::sync::mpsc;
 
 use crate::agent::state::AgentState;
+use crate::agent::{SubagentInfo, SubagentStatus};
 use crate::event::{self, Action, AppEvent};
 use crate::git::GitInfoCache;
 use crate::ipc;
@@ -146,6 +147,10 @@ pub struct App {
     collapsed: HashSet<String>,
     should_quit: bool,
     agent_states: HashMap<String, AgentState>,
+    /// Subagent states keyed by (tmux_pane, agent_id)
+    subagent_states: HashMap<(String, String), SubagentInfo>,
+    /// Count of completed subagents per pane
+    completed_subagent_counts: HashMap<String, u32>,
     git_cache: GitInfoCache,
     anim_frame: usize,
     /// Cache of last valid nvim file title per pane_id.
@@ -178,6 +183,8 @@ impl App {
             collapsed: HashSet::new(),
             should_quit: false,
             agent_states: persist::load_agent_states(),
+            subagent_states: HashMap::new(),
+            completed_subagent_counts: HashMap::new(),
             git_cache,
             anim_frame: 0,
             nvim_title_cache: HashMap::new(),
@@ -400,6 +407,24 @@ impl App {
         // Upper bound adjusted during rendering
     }
 
+    /// Get all active subagents for a given tmux pane, sorted by update time (newest first).
+    fn get_subagents_for_pane(&self, pane_id: &str) -> Vec<&SubagentInfo> {
+        let mut subagents: Vec<&SubagentInfo> = self
+            .subagent_states
+            .iter()
+            .filter(|((pane, _), _)| pane == pane_id)
+            .map(|(_, info)| info)
+            .filter(|info| info.state != SubagentStatus::Ended)
+            .collect();
+        subagents.sort_by(|a, b| b.updated_at.cmp(&a.updated_at));
+        subagents
+    }
+
+    /// Get completed subagent count for a pane.
+    fn get_completed_count(&self, pane_id: &str) -> u32 {
+        *self.completed_subagent_counts.get(pane_id).unwrap_or(&0)
+    }
+
     async fn handle_select(&mut self) -> Result<()> {
         if self.tree_items.is_empty() {
             return Ok(());
@@ -474,43 +499,49 @@ async fn run_app(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Resul
         eprintln!("Warning: failed to register tmux hooks: {}", e);
     }
 
-    // Event channel
-    let (tx, mut rx) = mpsc::channel(32);
+    // Event channel (larger buffer to handle bursts from IPC and events)
+    let (tx, mut rx) = mpsc::channel(256);
     let shutdown = Arc::new(AtomicBool::new(false));
     let mut handles: Vec<tokio::task::JoinHandle<()>> = Vec::new();
 
     // Spawn event loop in a blocking thread (crossterm events are blocking)
+    // Use std::sync::mpsc to avoid nested block_on anti-pattern
     let s = shutdown.clone();
-    let event_tx = tx.clone();
-    handles.push(tokio::task::spawn_blocking(move || {
-        let handle = tokio::runtime::Handle::current();
-        handle.block_on(async move {
-            loop {
-                if s.load(Ordering::Relaxed) {
-                    break;
-                }
-                if crossterm::event::poll(Duration::from_millis(100)).unwrap_or(false) {
-                    if let Ok(evt) = crossterm::event::read() {
-                        #[allow(clippy::collapsible_match)]
-                        match evt {
-                            Event::Key(key) => {
-                                if event_tx.send(AppEvent::Key(key)).await.is_err() {
-                                    break;
-                                }
-                            }
-                            Event::Mouse(mouse) => {
-                                if event_tx.send(AppEvent::Mouse(mouse)).await.is_err() {
-                                    break;
-                                }
-                            }
-                            _ => {}
+    let (blocking_tx, blocking_rx) = std::sync::mpsc::channel::<AppEvent>();
+    handles.push(tokio::task::spawn_blocking(move || loop {
+        if s.load(Ordering::Relaxed) {
+            break;
+        }
+        if crossterm::event::poll(Duration::from_millis(100)).unwrap_or(false) {
+            if let Ok(evt) = crossterm::event::read() {
+                #[allow(clippy::collapsible_match)]
+                match evt {
+                    Event::Key(key) => {
+                        if blocking_tx.send(AppEvent::Key(key)).is_err() {
+                            break;
                         }
                     }
-                } else if event_tx.send(AppEvent::Tick).await.is_err() {
-                    break;
+                    Event::Mouse(mouse) => {
+                        if blocking_tx.send(AppEvent::Mouse(mouse)).is_err() {
+                            break;
+                        }
+                    }
+                    _ => {}
                 }
             }
-        });
+        } else if blocking_tx.send(AppEvent::Tick).is_err() {
+            break;
+        }
+    }));
+
+    // Bridge blocking channel to async channel
+    let event_tx = tx.clone();
+    handles.push(tokio::spawn(async move {
+        while let Ok(evt) = blocking_rx.recv() {
+            if event_tx.send(evt).await.is_err() {
+                break;
+            }
+        }
     }));
 
     // Start IPC socket listener
