@@ -184,7 +184,7 @@ impl App {
             last_width: 80,
             tree_area: ratatui::layout::Rect::default(),
             user_navigated: false,
-            usage: None,
+            usage: persist::load_usage().map(Ok),
             usage_next_fetch: None,
         }
     }
@@ -905,6 +905,13 @@ async fn run_app(
     let git_entries = app.git_cache.to_cache_entries();
     if let Err(e) = persist::save_git_cache(&git_entries) {
         eprintln!("Warning: failed to save git cache: {}", e);
+    }
+
+    // Persist usage data on shutdown
+    if let Some(Ok(ref usage)) = app.usage {
+        if let Err(e) = persist::save_usage(usage) {
+            eprintln!("Warning: failed to save usage data: {}", e);
+        }
     }
 
     Ok(())
