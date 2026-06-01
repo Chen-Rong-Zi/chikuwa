@@ -6,6 +6,7 @@ use ratatui::Frame;
 use unicode_width::UnicodeWidthStr;
 
 use crate::agent::state::{AgentState, AgentStatus};
+use crate::agent::{SubagentInfo, SubagentStatus};
 use crate::git::GitInfo;
 use crate::tmux::types::{TmuxPane, TmuxSession};
 use crate::ui::theme;
@@ -878,6 +879,8 @@ fn render_bordered_item(
 }
 
 const MAX_VISIBLE_TOOLS: usize = 5;
+/// Maximum number of subagents to display (others shown as count)
+const MAX_VISIBLE_SUBAGENTS: usize = 3;
 
 /// Check if a tree item has an agent status to display.
 /// Count how many visual sub-lines the agent status occupies (status + optional tool).
@@ -1064,6 +1067,171 @@ fn render_bordered_git_sub_lines(
     }
 
     lines
+}
+
+/// Calculate the number of visual rows needed for subagents.
+pub fn subagent_visual_rows(subagents: &[&SubagentInfo], completed_count: u32) -> usize {
+    let visible_count = subagents.len().min(MAX_VISIBLE_SUBAGENTS);
+    let mut rows = subagents
+        .iter()
+        .take(visible_count)
+        .map(|s| 1 + s.tools.len().min(MAX_VISIBLE_TOOLS))
+        .sum::<usize>();
+
+    // Extra row for "+N more subagents"
+    if subagents.len() > MAX_VISIBLE_SUBAGENTS {
+        rows += 1;
+    }
+
+    // Extra row for completed count
+    if completed_count > 0 {
+        rows += 1;
+    }
+
+    rows
+}
+
+/// Render subagent status lines nested under the main agent.
+pub fn render_subagent_lines(
+    subagents: &[&SubagentInfo],
+    completed_count: u32,
+    width: u16,
+    selected: bool,
+    session_attached: bool,
+    anim_frame: usize,
+    toplevel: Option<&str>,
+) -> Vec<Line<'static>> {
+    let mut result = Vec::new();
+    let content_width = (width as usize).saturating_sub(4);
+    let border_style = session_border_style(session_attached);
+    let dim_style = Style::default().fg(Color::Rgb(0x7a, 0x7a, 0x7a));
+    let prefix_style = Style::default().fg(theme::COLOR_PURPLE);
+
+    let visible_count = subagents.len().min(MAX_VISIBLE_SUBAGENTS);
+    let has_more = subagents.len() > MAX_VISIBLE_SUBAGENTS;
+    let has_completed = completed_count > 0;
+
+    for (i, subagent) in subagents.iter().take(visible_count).enumerate() {
+        let is_last = i == visible_count - 1 && !has_more && !has_completed;
+        let tree_prefix = if is_last { "└─" } else { "├─" };
+
+        // Status icon based on state
+        let status_icon = match subagent.state {
+            SubagentStatus::Running => theme::status_icon(&AgentStatus::Running, anim_frame),
+            SubagentStatus::Waiting => theme::status_icon(&AgentStatus::Waiting, anim_frame),
+            SubagentStatus::Ended => theme::status_icon(&AgentStatus::Ended, anim_frame),
+        };
+
+        // Build label: "short_id: description" or just "short_id"
+        let label = match &subagent.description {
+            Some(desc) => {
+                let truncated = if desc.len() > 30 {
+                    format!("{}...", &desc[..27])
+                } else {
+                    desc.clone()
+                };
+                format!("{}: {}", subagent.short_id, truncated)
+            }
+            None => subagent.short_id.clone(),
+        };
+
+        let status_label = match subagent.state {
+            SubagentStatus::Running => "running",
+            SubagentStatus::Waiting => "waiting",
+            SubagentStatus::Ended => "ended",
+        };
+
+        let mut status_spans = vec![
+            Span::styled("    ", prefix_style),
+            Span::styled(tree_prefix.to_string(), prefix_style),
+            Span::styled(" ", prefix_style),
+            Span::styled(
+                status_icon.to_string(),
+                theme::status_style(&AgentStatus::Running, session_attached),
+            ),
+            Span::styled(format!(" {}", label), dim_style),
+            Span::styled(format!(" {}", status_label), dim_style),
+        ];
+
+        if !subagent.tools.is_empty() {
+            let tool_label = if subagent.tools.len() == 1 {
+                " (1 tool)".to_string()
+            } else {
+                format!(" ({} tools)", subagent.tools.len())
+            };
+            status_spans.push(Span::styled(tool_label, dim_style));
+        }
+
+        truncate_spans(&mut status_spans, content_width);
+        result.push(wrap_bordered_line(
+            status_spans,
+            content_width,
+            selected,
+            border_style,
+        ));
+
+        // Tool lines
+        let visible_tools = if subagent.tools.len() > MAX_VISIBLE_TOOLS {
+            &subagent.tools[subagent.tools.len() - MAX_VISIBLE_TOOLS..]
+        } else {
+            &subagent.tools
+        };
+
+        for tool in visible_tools {
+            let tool_text = match &tool.detail {
+                Some(detail) => {
+                    let display_detail = shorten_tool_detail(&tool.name, detail, toplevel);
+                    format!("{} {}: {}", theme::ICON_TOOL, tool.name, display_detail)
+                }
+                None => format!("{} {}", theme::ICON_TOOL, tool.name),
+            };
+
+            let tool_prefix = if is_last { "    " } else { "│   " };
+            let mut tool_spans = vec![
+                Span::styled(format!("{}  ", tool_prefix), prefix_style),
+                Span::styled(tool_text, dim_style),
+            ];
+            truncate_spans(&mut tool_spans, content_width);
+            result.push(wrap_bordered_line(tool_spans, content_width, selected, border_style));
+        }
+    }
+
+    // Show count of additional subagents
+    if has_more {
+        let extra = subagents.len() - MAX_VISIBLE_SUBAGENTS;
+        let mut count_spans = vec![
+            Span::styled("    └─ ", prefix_style),
+            Span::styled(format!("+{} more subagents", extra), dim_style),
+        ];
+        truncate_spans(&mut count_spans, content_width);
+        result.push(wrap_bordered_line(
+            count_spans,
+            content_width,
+            selected,
+            border_style,
+        ));
+    }
+
+    // Show completed count
+    if has_completed {
+        let completed_prefix = if has_more { "    │   " } else { "    └─ " };
+        let mut completed_spans = vec![
+            Span::styled(completed_prefix.to_string(), prefix_style),
+            Span::styled(
+                format!("✓ {} completed", completed_count),
+                Style::default().fg(Color::Rgb(0x60, 0x60, 0x60)),
+            ),
+        ];
+        truncate_spans(&mut completed_spans, content_width);
+        result.push(wrap_bordered_line(
+            completed_spans,
+            content_width,
+            selected,
+            border_style,
+        ));
+    }
+
+    result
 }
 
 /// Wrap text into lines by display width. First line has `first_width`, subsequent lines have `rest_width`.
