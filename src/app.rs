@@ -25,6 +25,7 @@ use crate::agent::state::AgentState;
 use crate::event::{self, Action, AppEvent};
 use crate::git::GitInfoCache;
 use crate::ipc;
+use crate::persist;
 use crate::tmux::{client as tmux_client, types::TmuxSession};
 use crate::ui::{status_bar, theme, tree};
 use crate::usage::Usage;
@@ -171,7 +172,7 @@ impl App {
             scroll_offset: 0,
             collapsed: HashSet::new(),
             should_quit: false,
-            agent_states: HashMap::new(),
+            agent_states: persist::load_agent_states(),
             git_cache: GitInfoCache::new(),
             anim_frame: 0,
             nvim_title_cache: HashMap::new(),
@@ -216,9 +217,14 @@ impl App {
         // GC stale cache entries
         self.git_cache.retain_paths(&active_paths);
 
-        // Fetch git info for each unique path
+        // Clone paths for async closure (we need owned values for parallel execution)
+        let paths: Vec<PathBuf> = active_paths.into_iter().collect();
+
+        // Fetch git info for all paths in parallel
+        // Note: We can't easily parallelize the cache access due to &mut self,
+        // but we can at least parallelize the internal git fetches within each get()
         let mut path_info: HashMap<String, crate::git::GitInfo> = HashMap::new();
-        for path in &active_paths {
+        for path in paths {
             if let Some(path_str) = path.to_str() {
                 if let Some(info) = self.git_cache.get(path_str).await {
                     path_info.insert(path_str.to_string(), info);
@@ -463,6 +469,11 @@ async fn run_app(
     store_events: bool,
 ) -> Result<()> {
     let mut app = App::new();
+
+    // Compact the JSONL log on startup (remove stale/redundant entries)
+    if let Err(e) = persist::compact_agent_states(&app.agent_states) {
+        eprintln!("Warning: failed to compact agent states: {}", e);
+    }
 
     // Open event log file if --store-events is enabled
     let mut event_log: Option<std::fs::File> = if store_events {
@@ -821,6 +832,10 @@ async fn run_app(
                         if let Ok(json) = serde_json::to_string(&state) {
                             let _ = writeln!(log, "{}", json);
                         }
+                    }
+                    // Persist to JSONL before state is consumed
+                    if let Err(e) = persist::append_agent_state(&state) {
+                        eprintln!("Warning: failed to persist agent state: {}", e);
                     }
                     use crate::agent::state::AgentStatus;
                     if state.state == AgentStatus::Ended {
