@@ -1240,9 +1240,12 @@ pub fn render_subagent_lines(
                 None => format!("{} {}", theme::ICON_TOOL, tool.name),
             };
 
-            let tool_prefix = if is_last { "    " } else { "│   " };
+            // Tool prefix should align with content after tree connector
+            // Status line: "    ├─ content" (8 chars before content)
+            // Tool line:   "    │   tool" (8 chars before tool)
+            let tool_prefix = if is_last { "      " } else { "    │   " };
             let mut tool_spans = vec![
-                Span::styled(format!("{}  ", tool_prefix), prefix_style),
+                Span::styled(tool_prefix.to_string(), prefix_style),
                 Span::styled(tool_text, dim_style),
             ];
             truncate_spans(&mut tool_spans, content_width);
