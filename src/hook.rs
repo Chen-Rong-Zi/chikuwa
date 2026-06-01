@@ -59,13 +59,19 @@ pub async fn run() -> Result<()> {
         .read_to_string(&mut stdin_buf)
         .context("Failed to read stdin")?;
 
+    // Debug: log raw input for subagent events
+    if stdin_buf.contains("SubagentStart") || stdin_buf.contains("SubagentStop") {
+        eprintln!("[chikuwa hook] received subagent event: {}", stdin_buf.trim());
+    }
+
     let input: HookInput = serde_json::from_str(stdin_buf.trim())
         .context("Failed to parse hook input JSON from stdin")?;
 
     let status = match input.hook_event_name.as_str() {
         "SessionStart" => AgentStatus::Started,
         "UserPromptSubmit" | "PreToolUse" | "PostToolUse" | "PostToolUseFailure"
-        | "SubagentStart" | "SubagentStop" => AgentStatus::Running,
+        | "SubagentStart" => AgentStatus::Running,
+        "SubagentStop" => AgentStatus::Ended, // SubagentStop means subagent finished
         "Stop" => AgentStatus::Waiting,
         "PermissionRequest" => AgentStatus::Permission,
         "Notification" => {
