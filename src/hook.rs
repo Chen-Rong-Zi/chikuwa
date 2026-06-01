@@ -93,6 +93,11 @@ pub async fn run() -> Result<()> {
     state.tool_name = input.tool_name;
     ipc::broadcast_state(&state).await?;
 
+    // Persist to JSONL so TUI can restore state on restart
+    if let Err(e) = crate::persist::append_agent_state(&state) {
+        eprintln!("Warning: failed to persist agent state: {}", e);
+    }
+
     Ok(())
 }
 
