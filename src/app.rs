@@ -425,6 +425,74 @@ impl App {
         *self.completed_subagent_counts.get(pane_id).unwrap_or(&0)
     }
 
+    /// Merge a subagent state update into the app state.
+    fn merge_subagent_state(&mut self, pane_id: String, agent_id: String, state: AgentState) {
+        use crate::agent::state::AgentStatus;
+
+        // Handle subagent ended
+        if state.state == AgentStatus::Ended {
+            self.subagent_states
+                .remove(&(pane_id.clone(), agent_id.clone()));
+            *self
+                .completed_subagent_counts
+                .entry(pane_id)
+                .or_insert(0) += 1;
+            return;
+        }
+
+        // Get or create subagent info
+        let entry = self
+            .subagent_states
+            .entry((pane_id.clone(), agent_id.clone()));
+
+        match entry {
+            std::collections::hash_map::Entry::Occupied(mut e) => {
+                let info = e.get_mut();
+                info.state = SubagentStatus::from(state.state);
+                info.updated_at = state.updated_at;
+
+                // Merge tools based on event
+                let event = state.hook_event_name.as_deref().unwrap_or("");
+                match event {
+                    "PreToolUse" => {
+                        if let Some(tool) = state.tools.first() {
+                            if !info
+                                .tools
+                                .iter()
+                                .any(|t| t.name == tool.name && t.detail == tool.detail)
+                            {
+                                info.tools.push(tool.clone());
+                            }
+                        }
+                    }
+                    "PostToolUse" | "PostToolUseFailure" => {
+                        if let Some(removing) = state.tools.first() {
+                            info.tools
+                                .retain(|t| t.name != removing.name || t.detail != removing.detail);
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            std::collections::hash_map::Entry::Vacant(e) => {
+                // New subagent - extract description from Task tool if available
+                let description = if state.tool_name.as_deref() == Some("Task") {
+                    state.tools.first().and_then(|t| t.detail.clone())
+                } else {
+                    None
+                };
+
+                let mut info = SubagentInfo::new(agent_id, description);
+                info.state = SubagentStatus::from(state.state);
+                info.updated_at = state.updated_at;
+                if let Some(tool) = state.tools.first() {
+                    info.tools.push(tool.clone());
+                }
+                e.insert(info);
+            }
+        }
+    }
+
     async fn handle_select(&mut self) -> Result<()> {
         if self.tree_items.is_empty() {
             return Ok(());
@@ -837,46 +905,57 @@ async fn run_app(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Resul
                     if let Err(e) = persist::append_agent_state(&state) {
                         eprintln!("Warning: failed to persist agent state: {}", e);
                     }
-                    use crate::agent::state::AgentStatus;
-                    if state.state == AgentStatus::Ended {
-                        app.agent_states.remove(&state.tmux_pane);
-                    } else if let Some(existing) = app.agent_states.get(&state.tmux_pane) {
-                        // Preserve existing session_id if incoming is None
-                        let session_id = state
-                            .session_id
-                            .clone()
-                            .or_else(|| existing.session_id.clone());
-                        // Merge active tools list based on hook event
-                        let tools = if state.state == AgentStatus::Running {
-                            let event = state.hook_event_name.as_deref().unwrap_or("");
-                            match event {
-                                "PreToolUse" => {
-                                    let mut tools = existing.tools.clone();
-                                    tools.extend(state.tools.iter().cloned());
-                                    tools
-                                }
-                                "PostToolUse" | "PostToolUseFailure" => {
-                                    let mut tools = existing.tools.clone();
-                                    if let Some(removing) = state.tools.first() {
-                                        if let Some(pos) = tools.iter().position(|t| {
-                                            t.name == removing.name && t.detail == removing.detail
-                                        }) {
-                                            tools.remove(pos);
-                                        }
-                                    }
-                                    tools
-                                }
-                                _ => existing.tools.clone(),
-                            }
-                        } else {
-                            Vec::new()
-                        };
-                        let mut merged = state;
-                        merged.session_id = session_id;
-                        merged.tools = tools;
-                        app.agent_states.insert(merged.tmux_pane.clone(), merged);
+
+                    // Determine if this is a subagent event
+                    if let Some(ref agent_id) = state.agent_id {
+                        // Subagent event
+                        let pane_id = state.tmux_pane.clone();
+                        let agent_id = agent_id.clone();
+                        app.merge_subagent_state(pane_id, agent_id, state);
                     } else {
-                        app.agent_states.insert(state.tmux_pane.clone(), state);
+                        // Main agent event
+                        use crate::agent::state::AgentStatus;
+                        if state.state == AgentStatus::Ended {
+                            app.agent_states.remove(&state.tmux_pane);
+                        } else if let Some(existing) = app.agent_states.get(&state.tmux_pane) {
+                            // Preserve existing session_id if incoming is None
+                            let session_id = state
+                                .session_id
+                                .clone()
+                                .or_else(|| existing.session_id.clone());
+                            // Merge active tools list based on hook event
+                            let tools = if state.state == AgentStatus::Running {
+                                let event = state.hook_event_name.as_deref().unwrap_or("");
+                                match event {
+                                    "PreToolUse" => {
+                                        let mut tools = existing.tools.clone();
+                                        tools.extend(state.tools.iter().cloned());
+                                        tools
+                                    }
+                                    "PostToolUse" | "PostToolUseFailure" => {
+                                        let mut tools = existing.tools.clone();
+                                        if let Some(removing) = state.tools.first() {
+                                            if let Some(pos) = tools.iter().position(|t| {
+                                                t.name == removing.name
+                                                    && t.detail == removing.detail
+                                            }) {
+                                                tools.remove(pos);
+                                            }
+                                        }
+                                        tools
+                                    }
+                                    _ => existing.tools.clone(),
+                                }
+                            } else {
+                                Vec::new()
+                            };
+                            let mut merged = state;
+                            merged.session_id = session_id;
+                            merged.tools = tools;
+                            app.agent_states.insert(merged.tmux_pane.clone(), merged);
+                        } else {
+                            app.agent_states.insert(state.tmux_pane.clone(), state);
+                        }
                     }
                     app.merge_agent_states();
                 }
@@ -1218,5 +1297,69 @@ mod tests {
 
         // Should fall back to just the filename since repos don't match
         assert_eq!(app.sessions[0].windows[0].panes[0].pane_title, "theme.rs");
+    }
+
+    #[test]
+    fn test_merge_subagent_state_new() {
+        let mut app = App::new();
+        let state = AgentState {
+            tmux_pane: "%0".to_string(),
+            session_id: None,
+            agent_id: Some("abc123".to_string()),
+            state: crate::agent::state::AgentStatus::Running,
+            updated_at: 100,
+            hook_event_name: Some("SubagentStart".to_string()),
+            tool_name: Some("Task".to_string()),
+            tool_detail: None,
+            tools: vec![crate::agent::state::ToolInfo {
+                name: "Task".to_string(),
+                detail: Some("Search codebase".to_string()),
+            }],
+        };
+
+        app.merge_subagent_state("%0".to_string(), "abc123".to_string(), state);
+
+        let subagents = app.get_subagents_for_pane("%0");
+        assert_eq!(subagents.len(), 1);
+        assert_eq!(
+            subagents[0].description,
+            Some("Search codebase".to_string())
+        );
+    }
+
+    #[test]
+    fn test_merge_subagent_state_ended() {
+        let mut app = App::new();
+
+        // First add a running subagent
+        let running_state = AgentState {
+            tmux_pane: "%0".to_string(),
+            session_id: None,
+            agent_id: Some("abc123".to_string()),
+            state: crate::agent::state::AgentStatus::Running,
+            updated_at: 100,
+            hook_event_name: None,
+            tool_name: None,
+            tool_detail: None,
+            tools: vec![],
+        };
+        app.merge_subagent_state("%0".to_string(), "abc123".to_string(), running_state);
+
+        // Then end it
+        let ended_state = AgentState {
+            tmux_pane: "%0".to_string(),
+            session_id: None,
+            agent_id: Some("abc123".to_string()),
+            state: crate::agent::state::AgentStatus::Ended,
+            updated_at: 200,
+            hook_event_name: Some("SubagentStop".to_string()),
+            tool_name: None,
+            tool_detail: None,
+            tools: vec![],
+        };
+        app.merge_subagent_state("%0".to_string(), "abc123".to_string(), ended_state);
+
+        assert_eq!(app.get_subagents_for_pane("%0").len(), 0);
+        assert_eq!(app.get_completed_count("%0"), 1);
     }
 }
