@@ -7,6 +7,7 @@ cargo build     # Build
 cargo test      # Run all tests
 cargo run       # Run TUI (requires tmux)
 cargo run -- hook          # Run hook mode (reads event from stdin JSON, requires TMUX_PANE)
+cargo run -- opencode-hook # Run OpenCode hook mode (reads event from stdin JSON, requires TMUX_PANE)
 cargo run -- notify        # Send refresh signal to running TUI
 ```
 
@@ -16,10 +17,11 @@ The `RUSTUP_TOOLCHAIN` env var may override `rust-toolchain.toml`. If you hit ve
 
 ```
 src/
-  main.rs              # CLI entry (clap): TUI / hook / notify subcommands
+  main.rs              # CLI entry (clap): TUI / hook / opencode-hook / notify subcommands
   app.rs               # TUI app state, async event loop, rendering orchestration
   event.rs             # Keyboard/mouse/timer event handling (crossterm)
   hook.rs              # `chikuwa hook`: stdin JSON → AgentState → IPC
+  opencode.rs          # `chikuwa opencode-hook`: OpenCode hook handler
   ipc.rs               # Unix domain socket IPC (client send_state/send_notify, server listener)
   git.rs               # Git branch/PR/repo info with per-path TTL caching
   usage.rs             # Claude API usage polling (OAuth, exponential backoff)
@@ -35,22 +37,26 @@ src/
     tree.rs            # Tree view: flatten, render, navigate, mouse hit-test
     status_bar.rs      # Bottom bar: agent counts + usage gauges
     theme.rs           # 3-color palette, NerdFont icons, status styling
+plugins/
+  chikuwa.ts           # OpenCode TUI plugin for agent state tracking
 ```
 
 ## Architecture
 
-Single binary, three subcommands:
+Single binary, four subcommands:
 
 | Subcommand | Purpose |
 |---|---|
 | (none) | TUI mode — renders tree view, polls tmux, listens on IPC |
 | `hook` | Hook mode — called by Claude Code hooks, sends AgentState via IPC |
+| `opencode-hook` | OpenCode hook mode — called by OpenCode hooks, sends AgentState via IPC |
 | `notify` | Notify mode — called by tmux hooks, sends refresh signal via IPC |
 
 ### Data Flow
 
 ```
 Claude Code ──(hooks)──→ chikuwa hook ──(IPC)──→ chikuwa TUI
+OpenCode ──(hooks)──→ chikuwa opencode-hook ──(IPC)──→ chikuwa TUI
 tmux ──(hooks)──→ chikuwa notify ──(IPC)──→ chikuwa TUI
 tmux ──(list-panes -a, polling every 2s)──←── chikuwa TUI
 git ──(rev-parse, gh pr view)──────────────←── chikuwa TUI
@@ -84,6 +90,20 @@ When an `AgentStateUpdate` arrives:
   - `PostToolUse` / `PostToolUseFailure` → remove tool from list
   - Other events → keep existing tools
 
+### Subagent Tracking
+
+Subagents spawned by the Task tool are tracked separately from the main agent:
+
+- `subagent_states: HashMap<(tmux_pane, agent_id), SubagentInfo>` — active subagents
+- `completed_subagent_counts: HashMap<tmux_pane, u32>` — completed count per pane
+
+Hook events with `agent_id` are routed to subagent tracking. `SubagentStart` creates a new entry,
+`PreToolUse`/`PostToolUse` update tools, and `SubagentStop` removes the entry and increments the
+completed count.
+
+UI renders subagents nested under the main agent with tree prefixes (├─/└─), showing each
+subagent's status and active tools. Completed subagents show as "✓ N completed".
+
 ### Hook Event Mapping
 
 | Claude Code Event | AgentStatus |
@@ -107,6 +127,66 @@ When an `AgentStateUpdate` arrives:
 | `WebFetch` | `tool_input.url` |
 | `WebSearch` | `tool_input.query` |
 | `Task` | `tool_input.description` |
+
+### OpenCode Hook Configuration (`opencode.rs`)
+
+OpenCode hooks are configured in `~/.config/opencode/opencode.json` under `experimental.hook`:
+
+```json
+{
+  "experimental": {
+    "hook": {
+      "file_edited": {
+        "*": [
+          {
+            "command": ["chikuwa", "opencode-hook"]
+          }
+        ]
+      },
+      "session_completed": [
+        {
+          "command": ["chikuwa", "opencode-hook"]
+        }
+      ]
+    }
+  }
+}
+```
+
+OpenCode events map to AgentStatus:
+
+| OpenCode Event | AgentStatus |
+|---|---|
+| `file_edited` | `Running` |
+| `session_completed` | `Ended` |
+
+### OpenCode Plugin (Recommended)
+
+For richer integration, install the chikuwa plugin:
+
+```bash
+mkdir -p ~/.config/opencode/plugins
+ln -s /path/to/chikuwa/plugins/chikuwa.ts ~/.config/opencode/plugins/chikuwa.ts
+```
+
+The plugin tracks all OpenCode events:
+
+| Event | Agent State |
+|---|---|
+| `session.created` | `started` |
+| `session.status` (busy) | `started` |
+| `session.status` (idle) | `waiting` |
+| `session.idle` | `waiting` |
+| `session.deleted` | `ended` |
+| `session.error` | `waiting` |
+| `tool.execute.before` | `running` |
+| `message.part.updated` (tool) | `running` |
+| `file.edited` | `running` |
+| `permission.asked` | `permission` |
+| `permission.replied` | `running` |
+| `command.executed` | `running` |
+
+The plugin writes directly to the chikuwa IPC socket and persists state to JSONL.
 
 ## Key Types
 

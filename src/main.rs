@@ -4,6 +4,7 @@ mod event;
 mod git;
 mod hook;
 mod ipc;
+mod opencode;
 mod persist;
 mod tmux;
 mod ui;
@@ -22,6 +23,8 @@ struct Cli {
 enum Commands {
     /// Hook mode: update agent state from Claude Code hooks (reads event from stdin JSON)
     Hook,
+    /// OpenCode hook mode: update agent state from OpenCode hooks (reads event from stdin JSON)
+    OpencodeHook,
     /// Notify the TUI of a tmux change (used by tmux hooks)
     Notify,
 }
@@ -33,6 +36,9 @@ async fn main() -> anyhow::Result<()> {
     match cli.command {
         Some(Commands::Hook) => {
             hook::run().await?;
+        }
+        Some(Commands::OpencodeHook) => {
+            opencode::run().await?;
         }
         Some(Commands::Notify) => {
             ipc::broadcast_notify().await?;
