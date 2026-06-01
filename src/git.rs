@@ -166,6 +166,50 @@ impl GitInfoCache {
     pub fn retain_paths(&mut self, active: &HashSet<PathBuf>) {
         self.entries.retain(|k, _| active.contains(k));
     }
+
+    /// Export cache entries for persistence.
+    pub fn to_cache_entries(&self) -> Vec<crate::persist::GitCacheEntry> {
+        self.entries
+            .iter()
+            .map(|(path, entry)| crate::persist::GitCacheEntry {
+                path: path.to_string_lossy().to_string(),
+                branch: entry.git_info.branch.clone(),
+                pr: entry.git_info.pr.clone(),
+                repo_name: entry.git_info.repo_name.clone(),
+                toplevel: entry.git_info.toplevel.clone(),
+                worktree_name: entry.git_info.worktree_name.clone(),
+            })
+            .collect()
+    }
+
+    /// Populate cache from persisted entries. Skips entries whose paths
+    /// no longer exist on disk.
+    pub fn populate_from_entries(&mut self, entries: Vec<crate::persist::GitCacheEntry>) {
+        let now = Instant::now();
+        for entry in entries {
+            if !std::path::Path::new(&entry.path).exists() {
+                continue;
+            }
+            let path_buf = PathBuf::from(&entry.path);
+            self.entries.insert(
+                path_buf,
+                CacheEntry {
+                    git_info: GitInfo {
+                        branch: entry.branch,
+                        pr: entry.pr,
+                        repo_name: entry.repo_name,
+                        toplevel: entry.toplevel,
+                        worktree_name: entry.worktree_name,
+                    },
+                    branch_fetched_at: now,
+                    pr_fetched_at: now,
+                    repo_name_fetched: true,
+                    toplevel_fetched: true,
+                    worktree_fetched: true,
+                },
+            );
+        }
+    }
 }
 
 /// Get current branch name via `git rev-parse --abbrev-ref HEAD`.

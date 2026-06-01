@@ -165,6 +165,11 @@ pub struct App {
 
 impl App {
     pub fn new() -> Self {
+        let mut git_cache = GitInfoCache::new();
+        if let Some(entries) = persist::load_git_cache() {
+            git_cache.populate_from_entries(entries);
+        }
+
         Self {
             sessions: Vec::new(),
             tree_items: Vec::new(),
@@ -173,7 +178,7 @@ impl App {
             collapsed: HashSet::new(),
             should_quit: false,
             agent_states: persist::load_agent_states(),
-            git_cache: GitInfoCache::new(),
+            git_cache,
             anim_frame: 0,
             nvim_title_cache: HashMap::new(),
             last_width: 80,
@@ -895,6 +900,12 @@ async fn run_app(
     }
     tmux_client::unregister_hooks().await;
     ipc::cleanup_instance_socket(std::process::id());
+
+    // Persist git cache on shutdown
+    let git_entries = app.git_cache.to_cache_entries();
+    if let Err(e) = persist::save_git_cache(&git_entries) {
+        eprintln!("Warning: failed to save git cache: {}", e);
+    }
 
     Ok(())
 }
