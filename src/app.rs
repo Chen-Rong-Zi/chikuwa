@@ -408,6 +408,7 @@ impl App {
     }
 
     /// Get all active subagents for a given tmux pane, sorted by update time (newest first).
+    #[allow(dead_code)]
     fn get_subagents_for_pane(&self, pane_id: &str) -> Vec<&SubagentInfo> {
         let mut subagents: Vec<&SubagentInfo> = self
             .subagent_states
@@ -421,6 +422,7 @@ impl App {
     }
 
     /// Get completed subagent count for a pane.
+    #[allow(dead_code)]
     fn get_completed_count(&self, pane_id: &str) -> u32 {
         *self.completed_subagent_counts.get(pane_id).unwrap_or(&0)
     }
@@ -1347,6 +1349,10 @@ mod tests {
 
     #[test]
     fn test_merge_subagent_state_new() {
+        // Clear persisted state to isolate test
+        let _ = std::fs::remove_file(crate::persist::subagent_states_path());
+        let _ = std::fs::remove_file(crate::persist::agent_states_path());
+
         let mut app = App::new();
         let state = AgentState {
             tmux_pane: "%0".to_string(),
@@ -1375,6 +1381,10 @@ mod tests {
 
     #[test]
     fn test_merge_subagent_state_ended() {
+        // Clear persisted state to isolate test
+        let _ = std::fs::remove_file(crate::persist::subagent_states_path());
+        let _ = std::fs::remove_file(crate::persist::agent_states_path());
+
         let mut app = App::new();
 
         // First add a running subagent

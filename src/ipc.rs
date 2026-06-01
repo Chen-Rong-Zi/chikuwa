@@ -63,12 +63,22 @@ pub async fn broadcast_notify() -> Result<()> {
 
 pub async fn start_listener(path: &Path, tx: mpsc::Sender<AppEvent>) -> Result<()> {
     let listener = UnixListener::bind(path)?;
+    // Semaphore to limit concurrent IPC handlers (prevent resource exhaustion)
+    let semaphore = std::sync::Arc::new(tokio::sync::Semaphore::new(16));
     loop {
         let (stream, _) = match listener.accept().await {
             Ok(conn) => conn,
             Err(_) => continue,
         };
         let tx = tx.clone();
+        let permit = match semaphore.clone().try_acquire_owned() {
+            Ok(p) => p,
+            Err(_) => {
+                // Too many concurrent handlers, skip this connection
+                // This prevents task spawn explosion under heavy load
+                continue;
+            }
+        };
         tokio::spawn(async move {
             let reader = BufReader::new(stream);
             let mut lines = reader.lines();
@@ -78,11 +88,13 @@ pub async fn start_listener(path: &Path, tx: mpsc::Sender<AppEvent>) -> Result<(
                     continue;
                 }
                 if line == "notify" {
-                    let _ = tx.send(AppEvent::TmuxChanged).await;
+                    // Use try_send to avoid blocking if channel is full
+                    let _ = tx.try_send(AppEvent::TmuxChanged);
                 } else if let Ok(state) = serde_json::from_str::<AgentState>(&line) {
-                    let _ = tx.send(AppEvent::AgentStateUpdate(state)).await;
+                    let _ = tx.try_send(AppEvent::AgentStateUpdate(state));
                 }
             }
+            drop(permit);
         });
     }
 }

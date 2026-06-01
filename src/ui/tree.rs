@@ -1123,6 +1123,7 @@ fn render_bordered_git_sub_lines(
 }
 
 /// Calculate the number of visual rows needed for subagents.
+#[allow(dead_code)]
 pub fn subagent_visual_rows(subagents: &[&SubagentInfo], completed_count: u32) -> usize {
     let visible_count = subagents.len().min(MAX_VISIBLE_SUBAGENTS);
     let mut rows = subagents
