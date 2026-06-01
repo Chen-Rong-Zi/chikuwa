@@ -425,6 +425,26 @@ impl App {
         *self.completed_subagent_counts.get(pane_id).unwrap_or(&0)
     }
 
+    /// Build a map of pane_id -> (subagents, completed_count) for UI rendering.
+    fn build_subagent_data(&self) -> HashMap<String, (Vec<SubagentInfo>, u32)> {
+        let mut data: HashMap<String, (Vec<SubagentInfo>, u32)> = HashMap::new();
+
+        for ((pane_id, _), info) in &self.subagent_states {
+            data.entry(pane_id.clone())
+                .or_insert_with(|| (Vec::new(), 0))
+                .0
+                .push(info.clone());
+        }
+
+        for (pane_id, count) in &self.completed_subagent_counts {
+            data.entry(pane_id.clone())
+                .or_insert_with(|| (Vec::new(), 0))
+                .1 = *count;
+        }
+
+        data
+    }
+
     /// Merge a subagent state update into the app state.
     fn merge_subagent_state(&mut self, pane_id: String, agent_id: String, state: AgentState) {
         use crate::agent::state::AgentStatus;
@@ -823,6 +843,7 @@ async fn run_app(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Resul
             }
 
             // Render tree with inline agent status on single-pane windows
+            let subagent_data = app.build_subagent_data();
             tree::render(
                 f,
                 chunks[1],
@@ -830,6 +851,7 @@ async fn run_app(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Resul
                 app.selected,
                 app.scroll_offset,
                 app.anim_frame,
+                &subagent_data,
             );
 
             // Render status bar

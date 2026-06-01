@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use ratatui::layout::Rect;
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
@@ -256,6 +258,34 @@ fn item_git_info(item: &TreeItem) -> Option<(&GitInfo, &'static str)> {
         {
             Some((pane.git_info.as_ref().unwrap(), "    "))
         }
+        _ => None,
+    }
+}
+
+/// Get the pane_id from a TreeItem, if it represents a pane with an agent.
+fn item_pane_id(item: &TreeItem) -> Option<&str> {
+    match item {
+        TreeItem::Window {
+            agent_state: Some(state),
+            ..
+        } => Some(&state.tmux_pane),
+        TreeItem::Pane {
+            pane,
+            ..
+        } => Some(&pane.pane_id),
+        _ => None,
+    }
+}
+
+/// Get the session toplevel from a TreeItem for relative path calculation.
+fn item_toplevel(item: &TreeItem) -> Option<&str> {
+    match item {
+        TreeItem::Window {
+            session_toplevel, ..
+        } => session_toplevel.as_deref(),
+        TreeItem::Pane {
+            session_toplevel, ..
+        } => session_toplevel.as_deref(),
         _ => None,
     }
 }
@@ -617,8 +647,10 @@ pub fn render(
     selected: usize,
     scroll_offset: usize,
     anim_frame: usize,
+    subagent_data: &HashMap<String, (Vec<SubagentInfo>, u32)>,
 ) {
-    let visual_lines = build_visual_lines(items, area.width, selected, anim_frame);
+    let visual_lines =
+        build_visual_lines(items, area.width, selected, anim_frame, subagent_data);
 
     let visible_height = area.height as usize;
     let visible_lines: Vec<Line> = visual_lines
@@ -636,6 +668,7 @@ fn build_visual_lines(
     width: u16,
     selected: usize,
     anim_frame: usize,
+    subagent_data: &HashMap<String, (Vec<SubagentInfo>, u32)>,
 ) -> Vec<Line<'static>> {
     let mut lines = Vec::new();
     let mut i = 0;
@@ -703,6 +736,26 @@ fn build_visual_lines(
                     lines.extend(render_bordered_agent_status_sub_lines(
                         item, width, is_sel, attached, anim_frame,
                     ));
+
+                    // Render subagent lines if this item has subagents
+                    if let Some(pane_id) = item_pane_id(item) {
+                        if let Some((subagents, completed)) = subagent_data.get(pane_id) {
+                            if !subagents.is_empty() || *completed > 0 {
+                                let subagents_refs: Vec<&SubagentInfo> = subagents.iter().collect();
+                                let toplevel = item_toplevel(item);
+                                lines.extend(render_subagent_lines(
+                                    &subagents_refs,
+                                    *completed,
+                                    width,
+                                    is_sel,
+                                    attached,
+                                    anim_frame,
+                                    toplevel,
+                                ));
+                            }
+                        }
+                    }
+
                     lines.extend(render_bordered_git_sub_lines(item, width, is_sel, attached));
                 }
 
