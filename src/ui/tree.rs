@@ -201,9 +201,18 @@ pub(crate) fn shorten_relative_path(path: &str, max_len: usize) -> String {
     abbreviated.join("/")
 }
 
-/// Compute a display label: relative path for shells, pane_title for nvim, command name otherwise.
-fn display_label(command: &str, path: &str, pane_title: &str, toplevel: Option<&str>) -> String {
-    if is_claude_command(command) {
+/// Compute a display label: relative path for shells, pane_title for nvim, activity for agents.
+/// If agent_state is present, always treat as an agent and show activity.
+fn display_label(
+    command: &str,
+    path: &str,
+    pane_title: &str,
+    toplevel: Option<&str>,
+    window_name: Option<&str>,
+    has_agent_state: bool,
+) -> String {
+    // If there's agent state, always show activity (for OpenCode which runs as node)
+    if has_agent_state || is_agent_command(command, window_name) {
         if let Some(activity) = extract_claude_activity(pane_title) {
             return activity;
         }
@@ -222,20 +231,23 @@ fn display_label(command: &str, path: &str, pane_title: &str, toplevel: Option<&
     }
 }
 
-/// Return the git info and prefix for an item, if it's a Claude Code pane with git info.
+/// Return the git info and prefix for an item, if it's an agent pane with git info.
 fn item_git_info(item: &TreeItem) -> Option<(&GitInfo, &'static str)> {
     match item {
         TreeItem::Window {
             git_info: Some(gi),
             pane_current_command,
+            window_name,
             ..
-        } if is_claude_command(pane_current_command.as_deref().unwrap_or(""))
-            && (gi.branch.is_some() || gi.pr.is_some()) =>
+        } if is_agent_command(
+            pane_current_command.as_deref().unwrap_or(""),
+            Some(window_name.as_str()),
+        ) && (gi.branch.is_some() || gi.pr.is_some()) =>
         {
             Some((gi, "  "))
         }
         TreeItem::Pane { pane, .. }
-            if is_claude_command(&pane.pane_current_command)
+            if is_agent_command(&pane.pane_current_command, None)
                 && pane
                     .git_info
                     .as_ref()
@@ -276,8 +288,27 @@ fn git_info_visual_rows(item: &TreeItem, width: u16) -> usize {
     }
 }
 
+/// Check if the command is Claude Code.
+#[allow(dead_code)]
 fn is_claude_command(command: &str) -> bool {
     command == "claude"
+}
+
+/// Check if this is an agent process (Claude Code or OpenCode).
+/// Claude Code shows as "claude", OpenCode shows as "node" with window name containing "opencode".
+fn is_agent_command(command: &str, window_name: Option<&str>) -> bool {
+    if command == "claude" {
+        return true;
+    }
+    // OpenCode runs as node but has "opencode" in window name
+    if command == "node" {
+        if let Some(wn) = window_name {
+            if wn.to_lowercase().contains("opencode") {
+                return true;
+            }
+        }
+    }
+    false
 }
 
 /// Extract Claude activity text from a pane title, stripping leading icon characters.
@@ -1131,14 +1162,15 @@ fn truncate_spans(spans: &mut Vec<Span<'static>>, max_width: usize) {
 }
 
 /// Choose the icon for a Window or Pane item.
-/// Priority: claude > neovim > shell > multi-pane window. Fallback: terminal.
+/// Priority: agent (claude/opencode) > neovim > shell > multi-pane window. Fallback: terminal.
 fn item_icon(
     agent_state: Option<&AgentState>,
     command: Option<&str>,
+    window_name: Option<&str>,
     has_multiple_panes: bool,
 ) -> &'static str {
     if let Some(cmd) = command {
-        if agent_state.is_some() || is_claude_command(cmd) {
+        if agent_state.is_some() || is_agent_command(cmd, window_name) {
             return theme::ICON_CLAUDE;
         }
         if cmd == "nvim" {
@@ -1177,6 +1209,7 @@ fn render_content_spans(
             let icon = item_icon(
                 agent_state.as_ref(),
                 pane_current_command.as_deref(),
+                Some(window_name.as_str()),
                 *has_multiple_panes,
             );
             spans.push(Span::styled(format!("{} ", icon), icon_style));
@@ -1191,7 +1224,14 @@ fn render_content_spans(
                 };
                 let label =
                     if let (Some(cmd), Some(path)) = (pane_current_command, pane_current_path) {
-                        display_label(cmd, path, pane_title.as_deref().unwrap_or(""), toplevel)
+                        display_label(
+                            cmd,
+                            path,
+                            pane_title.as_deref().unwrap_or(""),
+                            toplevel,
+                            Some(window_name.as_str()),
+                            agent_state.is_some(),
+                        )
                     } else {
                         window_name.clone()
                     };
@@ -1221,6 +1261,7 @@ fn render_content_spans(
             let icon = item_icon(
                 pane.agent_state.as_ref(),
                 Some(&pane.pane_current_command),
+                None,
                 false,
             );
             let mut spans = vec![
@@ -1240,6 +1281,8 @@ fn render_content_spans(
                 &pane.pane_current_path,
                 &pane.pane_title,
                 toplevel,
+                None,
+                pane.agent_state.is_some(),
             );
             let needs_attention = matches!(
                 pane.agent_state.as_ref().map(|a| &a.state),
@@ -1314,6 +1357,7 @@ mod tests {
                             Some(AgentState {
                                 tmux_pane: "%0".to_string(),
                                 session_id: None,
+                                agent_id: None,
                                 state: AgentStatus::Running,
                                 updated_at: 100,
                                 hook_event_name: None,
@@ -1510,12 +1554,21 @@ mod tests {
                 "zsh",
                 "/home/user/project/src",
                 "",
-                Some("/home/user/project")
+                Some("/home/user/project"),
+                None,
+                false
             ),
             "project/src/"
         );
         assert_eq!(
-            display_label("zsh", "/home/user/project", "", Some("/home/user/project")),
+            display_label(
+                "zsh",
+                "/home/user/project",
+                "",
+                Some("/home/user/project"),
+                None,
+                false
+            ),
             "project/"
         );
     }
@@ -1524,26 +1577,35 @@ mod tests {
     fn test_display_label_shell_without_toplevel() {
         std::env::set_var("HOME", "/home/user");
         assert_eq!(
-            display_label("zsh", "/home/user/projects/myapp", "", None),
+            display_label("zsh", "/home/user/projects/myapp", "", None, None, false),
             "~/p/myapp/"
         );
-        assert_eq!(display_label("bash", "/tmp", "", None), "/tmp/");
+        assert_eq!(
+            display_label("bash", "/tmp", "", None, None, false),
+            "/tmp/"
+        );
     }
 
     #[test]
     fn test_display_label_nvim() {
         assert_eq!(
-            display_label("nvim", "/home/user", "app.rs", None),
+            display_label("nvim", "/home/user", "app.rs", None, None, false),
             "app.rs"
         );
-        assert_eq!(display_label("nvim", "/home/user", "", None), "nvim");
+        assert_eq!(
+            display_label("nvim", "/home/user", "", None, None, false),
+            "nvim"
+        );
     }
 
     #[test]
     fn test_display_label_non_shell() {
-        assert_eq!(display_label("vim", "/home/user", "", None), "vim");
         assert_eq!(
-            display_label("node", "/home/user/project", "", None),
+            display_label("vim", "/home/user", "", None, None, false),
+            "vim"
+        );
+        assert_eq!(
+            display_label("node", "/home/user/project", "", None, None, false),
             "node"
         );
     }
@@ -1578,7 +1640,9 @@ mod tests {
                 "zsh",
                 "/home/user/src/github.com/nownabe/chikuwa/path/to/dir",
                 "",
-                None
+                None,
+                None,
+                false
             ),
             "~/s/g/n/c/p/t/dir/"
         );
@@ -1850,11 +1914,18 @@ mod tests {
     #[test]
     fn test_display_label_claude_activity() {
         assert_eq!(
-            display_label("claude", "/home/user", "✳ Rust環境変数設定", None),
+            display_label(
+                "claude",
+                "/home/user",
+                "✳ Rust環境変数設定",
+                None,
+                None,
+                false
+            ),
             "Rust環境変数設定"
         );
         assert_eq!(
-            display_label("claude", "/home/user", "✳ Fixing bug", None),
+            display_label("claude", "/home/user", "✳ Fixing bug", None, None, false),
             "Fixing bug"
         );
     }
@@ -1862,11 +1933,11 @@ mod tests {
     #[test]
     fn test_display_label_claude_default_title() {
         assert_eq!(
-            display_label("claude", "/home/user", "⠐ Claude Code", None),
+            display_label("claude", "/home/user", "⠐ Claude Code", None, None, false),
             "Claude Code"
         );
         assert_eq!(
-            display_label("claude", "/home/user", "✳ Claude Code", None),
+            display_label("claude", "/home/user", "✳ Claude Code", None, None, false),
             "Claude Code"
         );
     }
@@ -1876,8 +1947,36 @@ mod tests {
         // Non-claude command with icon in title should NOT extract activity
         std::env::set_var("HOME", "/home/user");
         assert_eq!(
-            display_label("zsh", "/home/user/src", "✳ some title", None),
+            display_label("zsh", "/home/user/src", "✳ some title", None, None, false),
             "~/src/"
+        );
+    }
+
+    #[test]
+    fn test_display_label_node_with_agent_state() {
+        // node with agent_state should show activity (OpenCode case)
+        assert_eq!(
+            display_label(
+                "node",
+                "/home/user",
+                "✳ Working on feature",
+                None,
+                None,
+                true
+            ),
+            "Working on feature"
+        );
+        // node without agent_state should just show "node"
+        assert_eq!(
+            display_label(
+                "node",
+                "/home/user",
+                "✳ Working on feature",
+                None,
+                None,
+                false
+            ),
+            "node"
         );
     }
 
@@ -1931,6 +2030,24 @@ mod tests {
         assert!(!is_claude_command("node"));
         assert!(!is_claude_command("zsh"));
         assert!(!is_claude_command(""));
+    }
+
+    #[test]
+    fn test_is_agent_command() {
+        // Claude Code
+        assert!(is_agent_command("claude", None));
+        assert!(is_agent_command("claude", Some("opencode"))); // window name doesn't matter for claude
+
+        // OpenCode (node with opencode window name)
+        assert!(is_agent_command("node", Some("opencode")));
+        assert!(is_agent_command("node", Some("OpenCode")));
+        assert!(is_agent_command("node", Some("my-opencode-project")));
+
+        // Not agents
+        assert!(!is_agent_command("node", None));
+        assert!(!is_agent_command("node", Some("my-project")));
+        assert!(!is_agent_command("zsh", None));
+        assert!(!is_agent_command("zsh", Some("opencode")));
     }
 
     #[test]

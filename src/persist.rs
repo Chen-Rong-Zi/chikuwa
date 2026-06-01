@@ -272,6 +272,7 @@ mod tests {
         let running = AgentState {
             tmux_pane: "%0".to_string(),
             session_id: None,
+            agent_id: None,
             state: AgentStatus::Running,
             updated_at: std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
@@ -313,6 +314,7 @@ mod tests {
         let state1 = AgentState {
             tmux_pane: "%0".to_string(),
             session_id: Some("old-session".to_string()),
+            agent_id: None,
             state: AgentStatus::Running,
             updated_at: now - 10,
             hook_event_name: None,
@@ -356,6 +358,7 @@ mod tests {
         let fresh = AgentState {
             tmux_pane: "%0".to_string(),
             session_id: None,
+            agent_id: None,
             state: AgentStatus::Running,
             updated_at: now,
             hook_event_name: None,
@@ -439,6 +442,7 @@ mod tests {
             AgentState {
                 tmux_pane: "%0".to_string(),
                 session_id: Some("s1".to_string()),
+                agent_id: None,
                 state: AgentStatus::Running,
                 updated_at: now,
                 hook_event_name: None,

@@ -34,6 +34,8 @@ pub struct AgentState {
     pub tmux_pane: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub session_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub agent_id: Option<String>,
     pub state: AgentStatus,
     pub updated_at: u64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -51,6 +53,7 @@ impl AgentState {
         Self {
             tmux_pane,
             session_id: None,
+            agent_id: None,
             state,
             updated_at: now(),
             hook_event_name: None,
@@ -123,6 +126,7 @@ mod tests {
         let state = AgentState {
             tmux_pane: "%5".to_string(),
             session_id: Some("abc123".to_string()),
+            agent_id: None,
             state: AgentStatus::Running,
             updated_at: 1234567890,
             hook_event_name: None,

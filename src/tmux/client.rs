@@ -281,6 +281,7 @@ mod tests {
             AgentState {
                 tmux_pane: "%0".to_string(),
                 session_id: Some("sess1".to_string()),
+                agent_id: None,
                 state: AgentStatus::Running,
                 updated_at: 100,
                 hook_event_name: None,

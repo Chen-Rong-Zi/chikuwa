@@ -13,6 +13,8 @@ struct HookInput {
     #[serde(default)]
     session_id: Option<String>,
     #[serde(default)]
+    agent_id: Option<String>,
+    #[serde(default)]
     tool_name: Option<String>,
     #[serde(default)]
     tool_input: Option<serde_json::Value>,
@@ -79,6 +81,7 @@ pub async fn run() -> Result<()> {
 
     let mut state = AgentState::new(pane_id, status);
     state.session_id = input.session_id;
+    state.agent_id = input.agent_id;
     state.hook_event_name = Some(input.hook_event_name);
     if let Some(ref name) = input.tool_name {
         let detail = input
