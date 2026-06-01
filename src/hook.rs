@@ -67,6 +67,12 @@ pub async fn run() -> Result<()> {
     let input: HookInput = serde_json::from_str(stdin_buf.trim())
         .context("Failed to parse hook input JSON from stdin")?;
 
+    // Debug: log all events to see what's being sent
+    eprintln!(
+        "[chikuwa hook] event: {} agent_id: {:?}",
+        input.hook_event_name, input.agent_id
+    );
+
     let status = match input.hook_event_name.as_str() {
         "SessionStart" => AgentStatus::Started,
         "UserPromptSubmit" | "PreToolUse" | "PostToolUse" | "PostToolUseFailure"
@@ -82,7 +88,14 @@ pub async fn run() -> Result<()> {
             }
         }
         "SessionEnd" => AgentStatus::Ended,
-        _ => return Ok(()),
+        _ => {
+            // Log unknown events for debugging
+            eprintln!(
+                "[chikuwa hook] unknown event '{}', ignoring",
+                input.hook_event_name
+            );
+            return Ok(());
+        }
     };
 
     let mut state = AgentState::new(pane_id, status);
