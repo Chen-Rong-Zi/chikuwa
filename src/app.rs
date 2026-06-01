@@ -422,10 +422,10 @@ impl App {
         // Switch tmux for windows/panes
         self.user_navigated = false;
         let target = item.tmux_target();
-        if let Ok(Some(client)) = tmux_client::detect_client().await {
-            let _ = tmux_client::switch_to(&client, &target).await;
-            self.refresh().await?;
+        if let Err(e) = tmux_client::switch_to(&target).await {
+            eprintln!("Warning: failed to switch tmux: {}", e);
         }
+        self.refresh().await?;
 
         Ok(())
     }

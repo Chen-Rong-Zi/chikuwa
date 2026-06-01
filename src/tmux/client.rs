@@ -108,26 +108,12 @@ fn build_tree(raw: &str, agent_states: &HashMap<String, AgentState>) -> Vec<Tmux
     sessions
 }
 
-/// Detect the target tmux client (most recently attached).
-pub async fn detect_client() -> Result<Option<String>> {
+/// Switch the current tmux client to a given target (session, window, or pane).
+/// When run from within a tmux pane, switch-client automatically targets
+/// the client that owns the current pane.
+pub async fn switch_to(target: &str) -> Result<()> {
     let output = Command::new("tmux")
-        .args(["list-clients", "-F", "#{client_tty}"])
-        .output()
-        .await
-        .context("Failed to execute tmux list-clients")?;
-
-    if !output.status.success() {
-        return Ok(None);
-    }
-
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    Ok(stdout.lines().next().map(|s| s.to_string()))
-}
-
-/// Switch tmux client to a given target (session, window, or pane).
-pub async fn switch_to(client_tty: &str, target: &str) -> Result<()> {
-    let output = Command::new("tmux")
-        .args(["switch-client", "-c", client_tty, "-t", target])
+        .args(["switch-client", "-t", target])
         .output()
         .await
         .context("Failed to execute tmux switch-client")?;
