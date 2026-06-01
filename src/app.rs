@@ -1,11 +1,11 @@
 use std::collections::{HashMap, HashSet};
-use std::io::{self, Write as _};
+use std::io;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
-use anyhow::{Context, Result};
+use anyhow::Result;
 use crossterm::event::{
     DisableMouseCapture, EnableMouseCapture, Event, MouseButton, MouseEventKind,
 };
@@ -431,19 +431,8 @@ impl App {
     }
 }
 
-/// Returns the event log file path.
-fn event_log_path() -> std::path::PathBuf {
-    if let Ok(runtime_dir) = std::env::var("XDG_RUNTIME_DIR") {
-        std::path::PathBuf::from(runtime_dir)
-            .join("chikuwa")
-            .join("events.jsonl")
-    } else {
-        std::path::PathBuf::from("/tmp/chikuwa/events.jsonl")
-    }
-}
-
 /// Run the TUI application.
-pub async fn run(store_events: bool) -> Result<()> {
+pub async fn run() -> Result<()> {
     // Setup terminal
     enable_raw_mode()?;
     let mut stdout = io::stdout();
@@ -456,7 +445,7 @@ pub async fn run(store_events: bool) -> Result<()> {
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
 
-    let result = run_app(&mut terminal, store_events).await;
+    let result = run_app(&mut terminal).await;
 
     disable_raw_mode()?;
     execute!(
@@ -471,7 +460,6 @@ pub async fn run(store_events: bool) -> Result<()> {
 
 async fn run_app(
     terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
-    store_events: bool,
 ) -> Result<()> {
     let mut app = App::new();
 
@@ -479,23 +467,6 @@ async fn run_app(
     if let Err(e) = persist::compact_agent_states(&app.agent_states) {
         eprintln!("Warning: failed to compact agent states: {}", e);
     }
-
-    // Open event log file if --store-events is enabled
-    let mut event_log: Option<std::fs::File> = if store_events {
-        let path = event_log_path();
-        if let Some(parent) = path.parent() {
-            std::fs::create_dir_all(parent).ok();
-        }
-        Some(
-            std::fs::OpenOptions::new()
-                .create(true)
-                .append(true)
-                .open(&path)
-                .context(format!("Failed to open event log: {}", path.display()))?,
-        )
-    } else {
-        None
-    };
 
     // Initial data fetch
     app.refresh().await?;
@@ -833,11 +804,6 @@ async fn run_app(
                         Some(std::time::Instant::now() + Duration::from_secs(next_secs));
                 }
                 AppEvent::AgentStateUpdate(state) => {
-                    if let Some(ref mut log) = event_log {
-                        if let Ok(json) = serde_json::to_string(&state) {
-                            let _ = writeln!(log, "{}", json);
-                        }
-                    }
                     // Persist to JSONL before state is consumed
                     if let Err(e) = persist::append_agent_state(&state) {
                         eprintln!("Warning: failed to persist agent state: {}", e);

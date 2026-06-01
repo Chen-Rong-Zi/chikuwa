@@ -16,10 +16,6 @@ use clap::{Parser, Subcommand};
 struct Cli {
     #[command(subcommand)]
     command: Option<Commands>,
-
-    /// Store all received hook events to a JSONL file for debugging
-    #[arg(long)]
-    store_events: bool,
 }
 
 #[derive(Subcommand)]
@@ -42,7 +38,7 @@ async fn main() -> anyhow::Result<()> {
             ipc::broadcast_notify().await?;
         }
         None => {
-            app::run(cli.store_events).await?;
+            app::run().await?;
         }
     }
 
