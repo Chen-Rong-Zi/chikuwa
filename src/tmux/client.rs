@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 
 use anyhow::{Context, Result};
+use futures::future::join_all;
 use tokio::process::Command;
 
 use super::types::{TmuxPane, TmuxSession, TmuxWindow};
@@ -157,28 +158,48 @@ const HOOK_NAMES: &[&str] = &[
 const HOOK_INDEX: u32 = 42;
 
 /// Register tmux hooks that notify the TUI on structural changes.
+/// Registers all hooks in parallel for faster startup.
 pub async fn register_hooks() -> Result<()> {
     let exe = std::env::current_exe()
         .context("Failed to get current executable path")?
         .to_string_lossy()
         .to_string();
 
-    for hook_name in HOOK_NAMES {
-        let hook_arg = format!("{}[{}]", hook_name, HOOK_INDEX);
-        let cmd = format!("run-shell -b '{} notify'", exe);
-        let output = Command::new("tmux")
-            .args(["set-hook", "-g", &hook_arg, &cmd])
-            .output()
-            .await
-            .context(format!("Failed to execute tmux set-hook for {}", hook_name))?;
+    // Spawn all hook registrations in parallel
+    let handles: Vec<_> = HOOK_NAMES
+        .iter()
+        .map(|hook_name| {
+            let exe = exe.clone();
+            let hook_name = *hook_name;
+            tokio::spawn(async move {
+                let hook_arg = format!("{}[{}]", hook_name, HOOK_INDEX);
+                let cmd = format!("run-shell -b '{} notify'", exe);
+                let output = Command::new("tmux")
+                    .args(["set-hook", "-g", &hook_arg, &cmd])
+                    .output()
+                    .await
+                    .context(format!("Failed to execute tmux set-hook for {}", hook_name))?;
 
-        if !output.status.success() {
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            anyhow::bail!(
-                "Failed to register tmux hook {}: {}",
-                hook_name,
-                stderr.trim()
-            );
+                if !output.status.success() {
+                    let stderr = String::from_utf8_lossy(&output.stderr);
+                    anyhow::bail!(
+                        "Failed to register tmux hook {}: {}",
+                        hook_name,
+                        stderr.trim()
+                    );
+                }
+                Ok(())
+            })
+        })
+        .collect();
+
+    // Wait for all registrations and collect errors
+    let results = join_all(handles).await;
+    for result in results {
+        match result {
+            Ok(Ok(())) => {}
+            Ok(Err(e)) => return Err(e),
+            Err(e) => anyhow::bail!("Task join error: {}", e),
         }
     }
 

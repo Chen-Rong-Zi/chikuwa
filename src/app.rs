@@ -458,9 +458,7 @@ pub async fn run() -> Result<()> {
     result
 }
 
-async fn run_app(
-    terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
-) -> Result<()> {
+async fn run_app(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Result<()> {
     let mut app = App::new();
 
     // Compact the JSONL log on startup (remove stale/redundant entries)
