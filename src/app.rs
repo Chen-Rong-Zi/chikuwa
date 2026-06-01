@@ -1,10 +1,14 @@
 use std::collections::{HashMap, HashSet};
 use std::io::{self, Write as _};
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::{Context, Result};
-use crossterm::event::{DisableMouseCapture, EnableMouseCapture, MouseButton, MouseEventKind};
+use crossterm::event::{
+    DisableMouseCapture, EnableMouseCapture, Event, MouseButton, MouseEventKind,
+};
 use crossterm::execute;
 use crossterm::terminal::{
     disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen,
@@ -443,9 +447,6 @@ pub async fn run(store_events: bool) -> Result<()> {
 
     let result = run_app(&mut terminal, store_events).await;
 
-    // Cleanup
-    tmux_client::unregister_hooks().await;
-    ipc::cleanup_socket();
     disable_raw_mode()?;
     execute!(
         terminal.backend_mut(),
@@ -490,26 +491,61 @@ async fn run_app(
 
     // Event channel
     let (tx, mut rx) = mpsc::channel(32);
-    let tick_rate = Duration::from_secs(1);
+    let shutdown = Arc::new(AtomicBool::new(false));
+    let mut handles: Vec<tokio::task::JoinHandle<()>> = Vec::new();
 
     // Spawn event loop in a blocking thread (crossterm events are blocking)
+    let s = shutdown.clone();
     let event_tx = tx.clone();
-    tokio::task::spawn_blocking(move || {
-        let rt = tokio::runtime::Handle::current();
-        rt.block_on(event::event_loop(event_tx, tick_rate))
-    });
+    handles.push(tokio::task::spawn_blocking(move || {
+        let handle = tokio::runtime::Handle::current();
+        handle.block_on(async move {
+            loop {
+                if s.load(Ordering::Relaxed) {
+                    break;
+                }
+                if crossterm::event::poll(Duration::from_millis(100)).unwrap_or(false) {
+                    if let Ok(evt) = crossterm::event::read() {
+                        #[allow(clippy::collapsible_match)]
+                        match evt {
+                            Event::Key(key) => {
+                                if event_tx.send(AppEvent::Key(key)).await.is_err() {
+                                    break;
+                                }
+                            }
+                            Event::Mouse(mouse) => {
+                                if event_tx.send(AppEvent::Mouse(mouse)).await.is_err() {
+                                    break;
+                                }
+                            }
+                            _ => {}
+                        }
+                    }
+                } else if event_tx.send(AppEvent::Tick).await.is_err() {
+                    break;
+                }
+            }
+        });
+    }));
 
     // Start IPC socket listener
+    let pid = std::process::id();
+    let socket_path = ipc::instance_socket_path(pid);
+    let _ = std::fs::create_dir_all(ipc::socket_dir());
+    if socket_path.exists() {
+        std::fs::remove_file(&socket_path).ok();
+    }
     let ipc_tx = tx.clone();
-    tokio::spawn(async move {
-        if let Err(e) = ipc::start_listener(ipc_tx).await {
+    let ipc_path = socket_path.clone();
+    handles.push(tokio::spawn(async move {
+        if let Err(e) = ipc::start_listener(&ipc_path, ipc_tx).await {
             eprintln!("IPC listener error: {}", e);
         }
-    });
+    }));
 
     // Animation tick (100ms for smooth spinner)
     let anim_tx = tx.clone();
-    tokio::spawn(async move {
+    handles.push(tokio::spawn(async move {
         let mut interval = tokio::time::interval(Duration::from_millis(150));
         loop {
             interval.tick().await;
@@ -517,15 +553,14 @@ async fn run_app(
                 break;
             }
         }
-    });
+    }));
 
     // Usage polling (10 min base, exponential backoff on 429)
     let usage_tx = tx.clone();
-    tokio::spawn(async move {
+    handles.push(tokio::spawn(async move {
         const BASE_INTERVAL: u64 = 600; // 10 minutes
         const MAX_INTERVAL: u64 = 3600; // 1 hour cap
         let mut current_interval = BASE_INTERVAL;
-        // Fetch immediately on start, then loop with delay
         let mut first = true;
         loop {
             if first {
@@ -565,7 +600,7 @@ async fn run_app(
                 }
             }
         }
-    });
+    }));
 
     loop {
         // Draw
@@ -704,7 +739,7 @@ async fn run_app(
         })?;
 
         if app.should_quit {
-            return Ok(());
+            break;
         }
 
         // Handle events
@@ -833,6 +868,20 @@ async fn run_app(
             }
         }
     }
+
+    // === SHUTDOWN ===
+    shutdown.store(true, Ordering::Relaxed);
+    for h in &handles {
+        h.abort();
+    }
+    drop(tx);
+    for h in handles {
+        let _ = h.await;
+    }
+    tmux_client::unregister_hooks().await;
+    ipc::cleanup_instance_socket(std::process::id());
+
+    Ok(())
 }
 
 #[cfg(test)]

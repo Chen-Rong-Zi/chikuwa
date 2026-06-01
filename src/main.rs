@@ -38,7 +38,7 @@ async fn main() -> anyhow::Result<()> {
             hook::run().await?;
         }
         Some(Commands::Notify) => {
-            ipc::send_notify().await?;
+            ipc::broadcast_notify().await?;
         }
         None => {
             app::run(cli.store_events).await?;

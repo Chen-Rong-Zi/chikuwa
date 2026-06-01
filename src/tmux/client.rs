@@ -185,14 +185,24 @@ pub async fn register_hooks() -> Result<()> {
     Ok(())
 }
 
-/// Unregister tmux hooks. Ignores errors (hooks may not exist).
+/// Unregister tmux hooks concurrently. Ignores errors (hooks may not exist).
 pub async fn unregister_hooks() {
-    for hook_name in HOOK_NAMES {
-        let hook_arg = format!("{}[{}]", hook_name, HOOK_INDEX);
-        let _ = Command::new("tmux")
-            .args(["set-hook", "-gu", &hook_arg])
-            .output()
-            .await;
+    let handles: Vec<_> = HOOK_NAMES
+        .iter()
+        .map(|name| {
+            let hook_arg = format!("{}[{}]", name, HOOK_INDEX);
+            tokio::spawn(async move {
+                let _ = Command::new("tmux")
+                    .arg("set-hook")
+                    .arg("-gu")
+                    .arg(&hook_arg)
+                    .output()
+                    .await;
+            })
+        })
+        .collect();
+    for h in handles {
+        let _ = h.await;
     }
 }
 

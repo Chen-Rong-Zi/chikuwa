@@ -1,6 +1,6 @@
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
-use anyhow::{Context, Result};
+use anyhow::Result;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::{UnixListener, UnixStream};
 use tokio::sync::mpsc;
@@ -8,65 +8,75 @@ use tokio::sync::mpsc;
 use crate::agent::state::AgentState;
 use crate::event::AppEvent;
 
-/// Returns the Unix domain socket path.
-pub fn socket_path() -> PathBuf {
+pub fn socket_dir() -> PathBuf {
     if let Ok(runtime_dir) = std::env::var("XDG_RUNTIME_DIR") {
-        PathBuf::from(runtime_dir).join("chikuwa.sock")
+        PathBuf::from(runtime_dir).join("chikuwa")
     } else {
-        PathBuf::from("/tmp/chikuwa.sock")
+        PathBuf::from("/tmp/chikuwa")
     }
 }
 
-/// Client side: connect to the socket, send a JSON line, and disconnect.
-/// Fails silently if the TUI is not running.
-pub async fn send_state(state: &AgentState) -> Result<()> {
-    let path = socket_path();
+pub fn instance_socket_path(pid: u32) -> PathBuf {
+    socket_dir().join(format!("{}.sock", pid))
+}
 
-    let mut stream = match UnixStream::connect(&path).await {
-        Ok(s) => s,
-        Err(_) => return Ok(()), // TUI not running, fail silently
+pub async fn broadcast_state(state: &AgentState) -> Result<()> {
+    let json = serde_json::to_string(state)?;
+    let mut buf = json;
+    buf.push('\n');
+    let dir = socket_dir();
+    let entries = match std::fs::read_dir(&dir) {
+        Ok(e) => e,
+        Err(_) => return Ok(()),
     };
-
-    let mut json = serde_json::to_string(state).context("Failed to serialize agent state")?;
-    json.push('\n');
-
-    stream
-        .write_all(json.as_bytes())
-        .await
-        .context("Failed to write to socket")?;
-    stream.shutdown().await.ok();
-
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.extension().and_then(|s| s.to_str()) != Some("sock") {
+            continue;
+        }
+        if let Ok(mut stream) = UnixStream::connect(&path).await {
+            let _ = stream.write_all(buf.as_bytes()).await;
+            let _ = stream.shutdown().await;
+        }
+    }
     Ok(())
 }
 
-/// Server side: listen on the socket and send events through the channel.
-pub async fn start_listener(tx: mpsc::Sender<AppEvent>) -> Result<()> {
-    let path = socket_path();
-
-    // Remove stale socket file if it exists
-    if path.exists() {
-        std::fs::remove_file(&path).ok();
+pub async fn broadcast_notify() -> Result<()> {
+    let dir = socket_dir();
+    let entries = match std::fs::read_dir(&dir) {
+        Ok(e) => e,
+        Err(_) => return Ok(()),
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.extension().and_then(|s| s.to_str()) != Some("sock") {
+            continue;
+        }
+        if let Ok(mut stream) = UnixStream::connect(&path).await {
+            let _ = stream.write_all(b"notify\n").await;
+            let _ = stream.shutdown().await;
+        }
     }
+    Ok(())
+}
 
-    let listener = UnixListener::bind(&path).context("Failed to bind Unix socket")?;
-
+pub async fn start_listener(path: &Path, tx: mpsc::Sender<AppEvent>) -> Result<()> {
+    let listener = UnixListener::bind(path)?;
     loop {
         let (stream, _) = match listener.accept().await {
             Ok(conn) => conn,
             Err(_) => continue,
         };
-
         let tx = tx.clone();
         tokio::spawn(async move {
             let reader = BufReader::new(stream);
             let mut lines = reader.lines();
-
             while let Ok(Some(line)) = lines.next_line().await {
                 let line = line.trim().to_string();
                 if line.is_empty() {
                     continue;
                 }
-
                 if line == "notify" {
                     let _ = tx.send(AppEvent::TmuxChanged).await;
                 } else if let Ok(state) = serde_json::from_str::<AgentState>(&line) {
@@ -77,30 +87,16 @@ pub async fn start_listener(tx: mpsc::Sender<AppEvent>) -> Result<()> {
     }
 }
 
-/// Client side: connect to the socket, send a "notify" line, and disconnect.
-/// Fails silently if the TUI is not running.
-pub async fn send_notify() -> Result<()> {
-    let path = socket_path();
-
-    let mut stream = match UnixStream::connect(&path).await {
-        Ok(s) => s,
-        Err(_) => return Ok(()), // TUI not running, fail silently
-    };
-
-    stream
-        .write_all(b"notify\n")
-        .await
-        .context("Failed to write to socket")?;
-    stream.shutdown().await.ok();
-
-    Ok(())
-}
-
-/// Remove the socket file on shutdown.
-pub fn cleanup_socket() {
-    let path = socket_path();
+pub fn cleanup_instance_socket(pid: u32) {
+    let path = instance_socket_path(pid);
     if path.exists() {
         std::fs::remove_file(&path).ok();
+    }
+    let dir = socket_dir();
+    if let Ok(mut entries) = std::fs::read_dir(&dir) {
+        if entries.next().is_none() {
+            std::fs::remove_dir(&dir).ok();
+        }
     }
 }
 
@@ -109,17 +105,25 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_socket_path_with_xdg() {
+    fn test_socket_dir_with_xdg() {
         std::env::set_var("XDG_RUNTIME_DIR", "/run/user/1000");
-        let path = socket_path();
-        assert_eq!(path, PathBuf::from("/run/user/1000/chikuwa.sock"));
+        let dir = socket_dir();
+        assert_eq!(dir, PathBuf::from("/run/user/1000/chikuwa"));
         std::env::remove_var("XDG_RUNTIME_DIR");
     }
 
     #[test]
-    fn test_socket_path_fallback() {
+    fn test_socket_dir_fallback() {
         std::env::remove_var("XDG_RUNTIME_DIR");
-        let path = socket_path();
-        assert_eq!(path, PathBuf::from("/tmp/chikuwa.sock"));
+        let dir = socket_dir();
+        assert_eq!(dir, PathBuf::from("/tmp/chikuwa"));
+    }
+
+    #[test]
+    fn test_instance_socket_path() {
+        std::env::set_var("XDG_RUNTIME_DIR", "/run/user/1000");
+        let path = instance_socket_path(12345);
+        assert_eq!(path, PathBuf::from("/run/user/1000/chikuwa/12345.sock"));
+        std::env::remove_var("XDG_RUNTIME_DIR");
     }
 }

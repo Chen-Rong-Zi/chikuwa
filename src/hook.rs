@@ -91,7 +91,7 @@ pub async fn run() -> Result<()> {
         }];
     }
     state.tool_name = input.tool_name;
-    ipc::send_state(&state).await?;
+    ipc::broadcast_state(&state).await?;
 
     Ok(())
 }

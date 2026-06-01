@@ -1,8 +1,4 @@
-use std::time::Duration;
-
-use anyhow::Result;
-use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyModifiers, MouseEvent};
-use tokio::sync::mpsc;
+use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseEvent};
 
 use crate::agent::state::AgentState;
 use crate::usage::Usage;
@@ -20,29 +16,6 @@ pub enum AppEvent {
     UsageUpdate(Usage, u64),
     /// Usage fetch failed. Second field is seconds until next fetch.
     UsageError(String, u64),
-}
-
-/// Spawn an event loop that sends key events and periodic ticks.
-pub async fn event_loop(tx: mpsc::Sender<AppEvent>, tick_rate: Duration) -> Result<()> {
-    loop {
-        if event::poll(tick_rate)? {
-            match event::read()? {
-                Event::Key(key) => {
-                    if tx.send(AppEvent::Key(key)).await.is_err() {
-                        return Ok(());
-                    }
-                }
-                Event::Mouse(mouse) => {
-                    if tx.send(AppEvent::Mouse(mouse)).await.is_err() {
-                        return Ok(());
-                    }
-                }
-                _ => {}
-            }
-        } else if tx.send(AppEvent::Tick).await.is_err() {
-            return Ok(());
-        }
-    }
 }
 
 /// Process a key event and return an action.
