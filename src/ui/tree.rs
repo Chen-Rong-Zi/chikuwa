@@ -461,6 +461,16 @@ pub fn find_active_index(sessions: &[TmuxSession], items: &[TreeItem]) -> Option
     None
 }
 
+/// Find the index of a pane by its pane_id (e.g., "%0").
+pub fn find_pane_index(items: &[TreeItem], pane_id: &str) -> Option<usize> {
+    items.iter().position(|item| {
+        matches!(
+            item,
+            TreeItem::Pane { pane: p, .. } if p.pane_id == pane_id
+        )
+    })
+}
+
 /// Compute the visual row index for a given item index.
 /// Visual rows include session borders and sub-lines.
 pub fn item_to_visual_row(items: &[TreeItem], target: usize, width: u16) -> usize {
@@ -2459,5 +2469,37 @@ mod tests {
                 visual
             );
         }
+    }
+
+    #[test]
+    fn test_find_pane_index() {
+        let sessions = vec![TmuxSession {
+            session_name: "main".to_string(),
+            session_attached: true,
+            windows: vec![
+                TmuxWindow {
+                    window_index: 0,
+                    window_name: "zsh".to_string(),
+                    window_active: true,
+                    panes: vec![make_pane("%0", "bash", None), make_pane("%1", "vim", None)],
+                },
+            ],
+            repo_name: None,
+            toplevel: None,
+            worktree_name: None,
+        }];
+        let items = flatten(&sessions, &HashSet::new());
+
+        // Should find %0 (first pane)
+        let idx0 = find_pane_index(&items, "%0");
+        assert!(idx0.is_some());
+
+        // Should find %1 (second pane)
+        let idx1 = find_pane_index(&items, "%1");
+        assert!(idx1.is_some());
+
+        // Should not find non-existent pane
+        let idx2 = find_pane_index(&items, "%99");
+        assert!(idx2.is_none());
     }
 }
