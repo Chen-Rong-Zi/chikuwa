@@ -307,12 +307,30 @@ impl App {
 
     fn rebuild_tree(&mut self) {
         self.tree_items = tree::flatten(&self.sessions, &self.collapsed);
-        // Follow the active (focused) pane/window only when the user hasn't navigated manually
-        if !self.user_navigated {
+
+        // On first selection, try to select the pane where chikuwa is running
+        if self.first_selection {
+            if let Ok(pane_id) = std::env::var("TMUX_PANE") {
+                if let Some(idx) = tree::find_pane_index(&self.tree_items, &pane_id) {
+                    self.selected = idx;
+                    self.first_selection = false;
+                }
+            }
+            // Fall back to active pane if TMUX_PANE not found
+            if self.first_selection && !self.user_navigated {
+                if let Some(active_idx) = tree::find_active_index(&self.sessions, &self.tree_items)
+                {
+                    self.selected = active_idx;
+                }
+            }
+            self.first_selection = false;
+        } else if !self.user_navigated {
+            // Follow the active (focused) pane/window when user hasn't navigated manually
             if let Some(active_idx) = tree::find_active_index(&self.sessions, &self.tree_items) {
                 self.selected = active_idx;
             }
         }
+
         // Clamp selected index
         if !self.tree_items.is_empty() && self.selected >= self.tree_items.len() {
             self.selected = self.tree_items.len() - 1;
