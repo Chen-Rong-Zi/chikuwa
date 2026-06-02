@@ -162,6 +162,8 @@ pub struct App {
     /// True when the user has navigated manually (Up/Down/Top/Bottom).
     /// Prevents auto-follow of the active tmux pane until the user selects an item.
     user_navigated: bool,
+    /// True until the first selection is made (used to select TMUX_PANE on startup).
+    first_selection: bool,
     /// Claude API usage data (fetched periodically).
     usage: Option<Result<Usage, String>>,
     /// When the next usage fetch is scheduled.
@@ -191,6 +193,7 @@ impl App {
             last_width: 80,
             tree_area: ratatui::layout::Rect::default(),
             user_navigated: false,
+            first_selection: true,
             usage: persist::load_usage().map(Ok),
             usage_next_fetch: None,
         }
