@@ -61,7 +61,10 @@ pub async fn run() -> Result<()> {
 
     // Debug: log raw input for subagent events
     if stdin_buf.contains("SubagentStart") || stdin_buf.contains("SubagentStop") {
-        eprintln!("[chikuwa hook] received subagent event: {}", stdin_buf.trim());
+        eprintln!(
+            "[chikuwa hook] received subagent event: {}",
+            stdin_buf.trim()
+        );
     }
 
     let input: HookInput = serde_json::from_str(stdin_buf.trim())

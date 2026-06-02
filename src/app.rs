@@ -625,31 +625,54 @@ async fn run_app(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Resul
 
     // Spawn event loop in a blocking thread (crossterm events are blocking)
     // Use std::sync::mpsc to avoid nested block_on anti-pattern
+    // Wrap in catch_unwind to prevent crossterm parsing panics from crashing the TUI
     let s = shutdown.clone();
     let (blocking_tx, blocking_rx) = std::sync::mpsc::channel::<AppEvent>();
     handles.push(tokio::task::spawn_blocking(move || loop {
         if s.load(Ordering::Relaxed) {
             break;
         }
-        if crossterm::event::poll(Duration::from_millis(100)).unwrap_or(false) {
-            if let Ok(evt) = crossterm::event::read() {
-                #[allow(clippy::collapsible_match)]
-                match evt {
-                    Event::Key(key) => {
-                        if blocking_tx.send(AppEvent::Key(key)).is_err() {
-                            break;
+
+        // Use catch_unwind to handle potential panics in crossterm event parsing
+        // (e.g., integer overflow in parse_csi_sgr_mouse with malformed sequences)
+        let poll_result =
+            std::panic::catch_unwind(|| crossterm::event::poll(Duration::from_millis(100)));
+
+        match poll_result {
+            Ok(Ok(true)) => {
+                // Successfully polled, event available
+                let read_result = std::panic::catch_unwind(crossterm::event::read);
+                if let Ok(Ok(evt)) = read_result {
+                    #[allow(clippy::collapsible_match)]
+                    match evt {
+                        Event::Key(key) => {
+                            if blocking_tx.send(AppEvent::Key(key)).is_err() {
+                                break;
+                            }
                         }
-                    }
-                    Event::Mouse(mouse) => {
-                        if blocking_tx.send(AppEvent::Mouse(mouse)).is_err() {
-                            break;
+                        Event::Mouse(mouse) => {
+                            if blocking_tx.send(AppEvent::Mouse(mouse)).is_err() {
+                                break;
+                            }
                         }
+                        _ => {}
                     }
-                    _ => {}
                 }
             }
-        } else if blocking_tx.send(AppEvent::Tick).is_err() {
-            break;
+            Ok(Ok(false)) => {
+                // No event available, send tick
+                if blocking_tx.send(AppEvent::Tick).is_err() {
+                    break;
+                }
+            }
+            Ok(Err(e)) => {
+                // crossterm error (not panic), log and continue
+                eprintln!("[chikuwa] crossterm error: {:?}", e);
+            }
+            Err(panic_info) => {
+                // Panic occurred during poll/read, log and continue
+                eprintln!("[chikuwa] recovered from crossterm panic: {:?}", panic_info);
+            }
         }
     }));
 

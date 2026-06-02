@@ -269,10 +269,7 @@ fn item_pane_id(item: &TreeItem) -> Option<&str> {
             agent_state: Some(state),
             ..
         } => Some(&state.tmux_pane),
-        TreeItem::Pane {
-            pane,
-            ..
-        } => Some(&pane.pane_id),
+        TreeItem::Pane { pane, .. } => Some(&pane.pane_id),
         _ => None,
     }
 }
@@ -649,8 +646,7 @@ pub fn render(
     anim_frame: usize,
     subagent_data: &HashMap<String, (Vec<SubagentInfo>, u32)>,
 ) {
-    let visual_lines =
-        build_visual_lines(items, area.width, selected, anim_frame, subagent_data);
+    let visual_lines = build_visual_lines(items, area.width, selected, anim_frame, subagent_data);
 
     let visible_height = area.height as usize;
     let visible_lines: Vec<Line> = visual_lines
@@ -1249,7 +1245,12 @@ pub fn render_subagent_lines(
                 Span::styled(tool_text, dim_style),
             ];
             truncate_spans(&mut tool_spans, content_width);
-            result.push(wrap_bordered_line(tool_spans, content_width, selected, border_style));
+            result.push(wrap_bordered_line(
+                tool_spans,
+                content_width,
+                selected,
+                border_style,
+            ));
         }
     }
 
@@ -1271,7 +1272,11 @@ pub fn render_subagent_lines(
 
     // Show completed count
     if has_completed {
-        let completed_prefix = if has_more { "    │   " } else { "    └─ " };
+        let completed_prefix = if has_more {
+            "    │   "
+        } else {
+            "    └─ "
+        };
         let mut completed_spans = vec![
             Span::styled(completed_prefix.to_string(), prefix_style),
             Span::styled(
