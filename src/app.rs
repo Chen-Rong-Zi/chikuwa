@@ -907,13 +907,20 @@ async fn run_app(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Resul
             app.tree_area = chunks[1];
             let visible_height = chunks[1].height as usize;
             app.last_width = chunks[1].width;
-            let selected_visual =
-                tree::item_to_visual_row(&app.tree_items, app.selected, app.last_width);
-            if selected_visual >= app.scroll_offset + visible_height {
-                app.scroll_offset = selected_visual.saturating_sub(visible_height - 1);
-            }
-            if selected_visual < app.scroll_offset {
-                app.scroll_offset = selected_visual;
+
+            if app.pending_center {
+                app.center_selection(visible_height);
+                app.pending_center = false;
+            } else {
+                // Default: just ensure selected is visible
+                let selected_visual =
+                    tree::item_to_visual_row(&app.tree_items, app.selected, app.last_width);
+                if selected_visual >= app.scroll_offset + visible_height {
+                    app.scroll_offset = selected_visual.saturating_sub(visible_height - 1);
+                }
+                if selected_visual < app.scroll_offset {
+                    app.scroll_offset = selected_visual;
+                }
             }
 
             // Render tree with inline agent status on single-pane windows
