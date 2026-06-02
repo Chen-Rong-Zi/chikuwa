@@ -164,6 +164,8 @@ pub struct App {
     user_navigated: bool,
     /// True until the first selection is made (used to select TMUX_PANE on startup).
     first_selection: bool,
+    /// When true, center the selected row on next render.
+    pending_center: bool,
     /// Claude API usage data (fetched periodically).
     usage: Option<Result<Usage, String>>,
     /// When the next usage fetch is scheduled.
@@ -194,6 +196,7 @@ impl App {
             tree_area: ratatui::layout::Rect::default(),
             user_navigated: false,
             first_selection: true,
+            pending_center: false,
             usage: persist::load_usage().map(Ok),
             usage_next_fetch: None,
         }
@@ -358,6 +361,7 @@ impl App {
 
     fn move_up(&mut self) {
         self.user_navigated = true;
+        self.pending_center = true;
         let mut idx = self.selected;
         while idx > 0 {
             idx -= 1;
@@ -371,6 +375,7 @@ impl App {
 
     fn move_down(&mut self) {
         self.user_navigated = true;
+        self.pending_center = true;
         let mut idx = self.selected;
         while idx < self.tree_items.len().saturating_sub(1) {
             idx += 1;
@@ -384,14 +389,15 @@ impl App {
 
     fn move_top(&mut self) {
         self.user_navigated = true;
+        self.pending_center = true;
         if let Some(idx) = self.tree_items.iter().position(|item| item.is_selectable()) {
             self.selected = idx;
         }
-        self.scroll_offset = 0;
     }
 
     fn move_bottom(&mut self) {
         self.user_navigated = true;
+        self.pending_center = true;
         if let Some(idx) = self
             .tree_items
             .iter()
@@ -426,6 +432,23 @@ impl App {
             self.scroll_offset = visual;
         }
         // Upper bound adjusted during rendering
+    }
+
+    /// Center the selected item in the viewport.
+    fn center_selection(&mut self, visible_height: usize) {
+        if visible_height == 0 {
+            return;
+        }
+        let visual = tree::item_to_visual_row(&self.tree_items, self.selected, self.last_width);
+        let total_visual = tree::total_visual_rows(&self.tree_items, self.last_width);
+
+        // Calculate center position
+        let half_height = visible_height / 2;
+        let desired_offset = visual.saturating_sub(half_height);
+
+        // Clamp to valid range
+        let max_offset = total_visual.saturating_sub(visible_height);
+        self.scroll_offset = desired_offset.min(max_offset);
     }
 
     /// Get all active subagents for a given tmux pane, sorted by update time (newest first).
