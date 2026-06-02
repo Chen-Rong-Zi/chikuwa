@@ -718,6 +718,18 @@ async fn run_app(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Resul
             Err(panic_info) => {
                 // Panic occurred during poll/read, log and continue
                 eprintln!("[chikuwa] recovered from crossterm panic: {:?}", panic_info);
+
+                // Try to consume the problematic event from the input buffer
+                // by repeatedly calling read() until it succeeds or there's no more data
+                // This prevents infinite panic loop from the same malformed event
+                for _ in 0..10 {
+                    match std::panic::catch_unwind(crossterm::event::read) {
+                        Ok(Ok(_)) => break, // Successfully consumed an event
+                        Ok(Err(_)) => break, // No more events
+                        Err(_) => continue, // Another panic, try again
+                    }
+                }
+
                 // Send tick to keep the event loop running (allows user to quit)
                 let _ = blocking_tx.send(AppEvent::Tick);
             }
