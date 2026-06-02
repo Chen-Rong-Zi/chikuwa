@@ -2476,14 +2476,12 @@ mod tests {
         let sessions = vec![TmuxSession {
             session_name: "main".to_string(),
             session_attached: true,
-            windows: vec![
-                TmuxWindow {
-                    window_index: 0,
-                    window_name: "zsh".to_string(),
-                    window_active: true,
-                    panes: vec![make_pane("%0", "bash", None), make_pane("%1", "vim", None)],
-                },
-            ],
+            windows: vec![TmuxWindow {
+                window_index: 0,
+                window_name: "zsh".to_string(),
+                window_active: true,
+                panes: vec![make_pane("%0", "bash", None), make_pane("%1", "vim", None)],
+            }],
             repo_name: None,
             toplevel: None,
             worktree_name: None,
