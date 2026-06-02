@@ -712,10 +712,14 @@ async fn run_app(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Resul
             Ok(Err(e)) => {
                 // crossterm error (not panic), log and continue
                 eprintln!("[chikuwa] crossterm error: {:?}", e);
+                // Send tick to keep the event loop running
+                let _ = blocking_tx.send(AppEvent::Tick);
             }
             Err(panic_info) => {
                 // Panic occurred during poll/read, log and continue
                 eprintln!("[chikuwa] recovered from crossterm panic: {:?}", panic_info);
+                // Send tick to keep the event loop running (allows user to quit)
+                let _ = blocking_tx.send(AppEvent::Tick);
             }
         }
     }));
