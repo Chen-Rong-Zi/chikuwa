@@ -55,14 +55,18 @@ const appendAgentState = (state: AgentState) => {
 const sendToIpc = async ($: any, state: AgentState) => {
 	try {
 		const files = readdirSync(CHIKUWA_STATE_DIR);
-		const socketFile = files.find(f => f.endsWith(".sock"));
-		if (!socketFile) {
+		const socketFiles = files.filter(f => f.endsWith(".sock"));
+		if (socketFiles.length === 0) {
 			log("No socket file found");
 			return;
 		}
-		const socketPath = join(CHIKUWA_STATE_DIR, socketFile);
 		const json = JSON.stringify(state);
-		await $`echo ${json} | nc -U ${socketPath}`.nothrow();
+		// Send to all socket files (like Rust broadcast_state does).
+		// Stale sockets will fail silently — only live TUI instances receive the message.
+		for (const socketFile of socketFiles) {
+			const socketPath = join(CHIKUWA_STATE_DIR, socketFile);
+			await $`echo ${json} | nc -U ${socketPath}`.nothrow();
+		}
 	} catch (e) {
 		log("Failed to send IPC", { error: String(e) });
 	}
