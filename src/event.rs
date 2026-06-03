@@ -28,6 +28,8 @@ pub fn handle_key(key: KeyEvent) -> Action {
             Action::ToggleCollapse
         }
         KeyCode::Char('k') | KeyCode::Up => Action::Up,
+        KeyCode::Char('h') | KeyCode::Left => Action::SwitchViewLeft,
+        KeyCode::Char('l') | KeyCode::Right => Action::SwitchViewRight,
         KeyCode::Enter | KeyCode::Char(' ') => Action::Select,
         KeyCode::Char('g') => Action::Top,
         KeyCode::Char('G') => Action::Bottom,
@@ -44,6 +46,8 @@ pub enum Action {
     Top,
     Bottom,
     ToggleCollapse,
+    SwitchViewLeft,
+    SwitchViewRight,
     None,
 }
 
@@ -125,5 +129,13 @@ mod tests {
         );
         // Plain 'k' is still Up
         assert_eq!(handle_key(key(KeyCode::Char('k'))), Action::Up);
+    }
+
+    #[test]
+    fn test_switch_view_hl() {
+        assert_eq!(handle_key(key(KeyCode::Char('h'))), Action::SwitchViewLeft);
+        assert_eq!(handle_key(key(KeyCode::Char('l'))), Action::SwitchViewRight);
+        assert_eq!(handle_key(key(KeyCode::Left)), Action::SwitchViewLeft);
+        assert_eq!(handle_key(key(KeyCode::Right)), Action::SwitchViewRight);
     }
 }

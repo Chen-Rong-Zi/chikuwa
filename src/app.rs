@@ -28,8 +28,14 @@ use crate::git::GitInfoCache;
 use crate::ipc;
 use crate::persist;
 use crate::tmux::{client as tmux_client, types::TmuxSession};
-use crate::ui::{status_bar, theme, tree};
+use crate::ui::{office, status_bar, theme, tree};
 use crate::usage::Usage;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ViewMode {
+    Tree,
+    Office,
+}
 
 /// Strip a leading NerdFont icon (Private Use Area character) and whitespace from a title.
 fn strip_leading_icon(title: &str) -> &str {
@@ -170,6 +176,7 @@ pub struct App {
     usage: Option<Result<Usage, String>>,
     /// When the next usage fetch is scheduled.
     usage_next_fetch: Option<std::time::Instant>,
+    view_mode: ViewMode,
 }
 
 impl App {
@@ -199,6 +206,7 @@ impl App {
             pending_center: false,
             usage: persist::load_usage().map(Ok),
             usage_next_fetch: None,
+            view_mode: ViewMode::Tree,
         }
     }
 
@@ -1007,6 +1015,24 @@ async fn run_app(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Resul
                         Action::Top => app.move_top(),
                         Action::Bottom => app.move_bottom(),
                         Action::ToggleCollapse => app.toggle_current_session(),
+                        Action::SwitchViewLeft => {
+                            app.view_mode = match app.view_mode {
+                                ViewMode::Office => ViewMode::Tree,
+                                ViewMode::Tree => ViewMode::Office,
+                            };
+                            app.selected = 0;
+                            app.scroll_offset = 0;
+                            app.user_navigated = false;
+                        }
+                        Action::SwitchViewRight => {
+                            app.view_mode = match app.view_mode {
+                                ViewMode::Tree => ViewMode::Office,
+                                ViewMode::Office => ViewMode::Tree,
+                            };
+                            app.selected = 0;
+                            app.scroll_offset = 0;
+                            app.user_navigated = false;
+                        }
                         Action::None => {}
                     }
                 }
