@@ -25,6 +25,11 @@ pub const ICON_BOLT: &str = "\u{f0e7}"; //
 pub const ICON_TOOL: &str = "\u{f0ad}"; //
 pub const COLOR_YELLOW: Color = Color::Rgb(0xff, 0xd7, 0x00);
 pub const COLOR_PERMISSION_BG: Color = Color::Rgb(0x3a, 0x1a, 0x3a);
+
+// UI accent colors (exception: not in the 3-color palette, used for dim/selection)
+pub const COLOR_DIM: Color = Color::Rgb(0x7a, 0x7a, 0x7a);
+pub const COLOR_DIM_DARK: Color = Color::Rgb(0x60, 0x60, 0x60);
+pub const COLOR_SELECTED_BG: Color = Color::DarkGray;
 /// Return a color for a usage utilization value (0.0–1.0).
 pub fn usage_color(utilization: f64) -> Color {
     if utilization < 0.8 {
@@ -53,7 +58,7 @@ pub fn status_color(status: &AgentStatus, session_attached: bool) -> Color {
                 COLOR_PURPLE
             }
         }
-        _ => Color::Rgb(0x7a, 0x7a, 0x7a),
+        _ => COLOR_DIM,
     }
 }
 

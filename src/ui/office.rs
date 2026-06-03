@@ -94,25 +94,56 @@ pub fn render(
     f.render_widget(paragraph, area);
 }
 
-/// Get the total number of lines in the office view (for scroll bounds).
-#[allow(dead_code)]
-pub fn total_lines(
-    sessions: &[TmuxSession],
-    subagent_data: &std::collections::HashMap<String, (Vec<SubagentInfo>, u32)>,
-    width: u16,
-    selected: usize,
-    anim_frame: usize,
-) -> usize {
-    let entries = collect_agent_entries(sessions, subagent_data);
-    build_office_lines(&entries, width, selected, anim_frame).len()
-}
-
 /// Get the number of agent entries (selectable items).
 pub fn agent_count(
     sessions: &[TmuxSession],
     subagent_data: &std::collections::HashMap<String, (Vec<SubagentInfo>, u32)>,
 ) -> usize {
     collect_agent_entries(sessions, subagent_data).len()
+}
+
+/// Compute the line range that the selected agent entry occupies,
+/// for scroll adjustment before rendering. Returns (start_line, end_line, total_lines).
+pub fn selected_line_range(
+    sessions: &[TmuxSession],
+    subagent_data: &std::collections::HashMap<String, (Vec<SubagentInfo>, u32)>,
+    width: u16,
+    selected: usize,
+    anim_frame: usize,
+) -> (usize, usize, usize) {
+    let entries = collect_agent_entries(sessions, subagent_data);
+    let lines = build_office_lines(&entries, width, selected, anim_frame);
+    let total = lines.len();
+
+    // Find the line range for the selected entry by scanning for its room borders.
+    // Each room starts with ┌ and ends with ┘. We track which entry index we're on.
+    let mut entry_idx = 0;
+    let mut room_start = 0;
+    let mut room_end = 0;
+    let mut found = false;
+
+    for (line_idx, line) in lines.iter().enumerate() {
+        let text: String = line.spans.iter().map(|s| s.content.as_ref()).collect();
+        if text.contains('┌') {
+            room_start = line_idx;
+            if entry_idx == selected {
+                found = true;
+            }
+        }
+        if text.contains('┘') {
+            if found {
+                room_end = line_idx;
+                break;
+            }
+            entry_idx += 1;
+        }
+    }
+
+    if found {
+        (room_start, room_end, total)
+    } else {
+        (0, 0, total)
+    }
 }
 
 /// Get the tmux target for the selected agent entry.
@@ -136,7 +167,7 @@ fn build_office_lines(
         let msg = "  No active agents";
         lines.push(Line::from(Span::styled(
             msg.to_string(),
-            Style::default().fg(Color::Rgb(0x7a, 0x7a, 0x7a)),
+            Style::default().fg(theme::COLOR_DIM),
         )));
         return lines;
     }
@@ -215,7 +246,7 @@ fn render_agent_room(
     is_permission: bool,
     anim_frame: usize,
 ) -> Vec<Line<'static>> {
-    let dim_style = Style::default().fg(Color::Rgb(0x7a, 0x7a, 0x7a));
+    let dim_style = Style::default().fg(theme::COLOR_DIM);
     let name_style = if is_permission {
         Style::default()
             .fg(theme::COLOR_WHITE)
@@ -403,7 +434,7 @@ fn render_agent_room(
         let comp_line = format!("  └─ ✅ {} completed", completed_count);
         let mut comp_spans = vec![
             Span::styled("│ ".to_string(), border_style),
-            Span::styled(comp_line, Style::default().fg(Color::Rgb(0x60, 0x60, 0x60))),
+            Span::styled(comp_line, Style::default().fg(theme::COLOR_DIM_DARK)),
         ];
         let used: usize = comp_spans.iter().map(|s| s.content.width()).sum();
         let pad = content_width.saturating_sub(used + 1);
@@ -433,7 +464,7 @@ fn render_agent_room(
 fn apply_bg(spans: &mut Vec<Span<'static>>, permission_bg: Option<Color>, is_selected: bool) {
     if is_selected {
         for span in spans {
-            span.style = span.style.bg(Color::DarkGray);
+            span.style = span.style.bg(theme::COLOR_SELECTED_BG);
         }
     } else if let Some(bg) = permission_bg {
         for span in spans {
@@ -568,5 +599,40 @@ mod tests {
             Some("main:0.0".to_string())
         );
         assert_eq!(selected_tmux_target(&sessions, &HashMap::new(), 1), None);
+    }
+
+    #[test]
+    fn test_build_office_lines_permission_highlight() {
+        let mut state = make_agent_state("%0", AgentStatus::Permission);
+        state.event_emoji = Some("🔐".to_string());
+        let entries = vec![AgentEntry {
+            pane_id: "%0".to_string(),
+            tmux_target: "main:0.0".to_string(),
+            agent_state: state,
+            subagents: Vec::new(),
+            completed_count: 0,
+        }];
+        // Use selected=1 (out of range) so is_selected is false, allowing permission bg to show
+        let lines = build_office_lines(&entries, 80, 1, 0);
+        assert!(lines.len() > 4);
+        // Verify permission background is applied — check that spans have the permission bg color
+        let first_line_spans = &lines[0].spans;
+        let has_permission_bg = first_line_spans
+            .iter()
+            .any(|s| s.style.bg == Some(theme::COLOR_PERMISSION_BG));
+        assert!(
+            has_permission_bg,
+            "Permission entry should have permission background"
+        );
+    }
+
+    #[test]
+    fn test_selected_line_range() {
+        let state = make_agent_state("%0", AgentStatus::Running);
+        let sessions = vec![make_session(vec![make_pane("%0", Some(state))])];
+        let (start, end, total) = selected_line_range(&sessions, &HashMap::new(), 80, 0, 0);
+        assert!(start <= end);
+        assert!(end < total);
+        assert!(total > 4);
     }
 }

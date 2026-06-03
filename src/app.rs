@@ -1049,18 +1049,29 @@ async fn run_app(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Resul
                     );
                 }
                 ViewMode::Office => {
-                    // Simple scroll for office view: ensure selected item is visible
-                    let count = office::agent_count(&app.sessions, &subagent_data);
-                    if app.selected >= count {
-                        app.selected = count.saturating_sub(1);
-                    }
+                    // Compute scroll offset before rendering
+                    let (room_start, room_end, total_lines_val) = office::selected_line_range(
+                        &app.sessions,
+                        &subagent_data,
+                        app.last_width,
+                        app.selected,
+                        app.anim_frame,
+                    );
+
                     if app.pending_center {
-                        // Approximate: each agent entry is ~6-10 lines, center roughly
-                        let approx_lines_per = 7;
-                        let center_line = app.selected * approx_lines_per + approx_lines_per / 2;
-                        let desired_offset = center_line.saturating_sub(visible_height / 2);
-                        app.scroll_offset = desired_offset;
+                        let center = (room_start + room_end) / 2;
+                        let desired_offset = center.saturating_sub(visible_height / 2);
+                        let max_scroll = total_lines_val.saturating_sub(visible_height);
+                        app.scroll_offset = desired_offset.min(max_scroll);
                         app.pending_center = false;
+                    } else {
+                        // Ensure selected room is visible
+                        if room_end >= app.scroll_offset + visible_height {
+                            app.scroll_offset = room_end.saturating_sub(visible_height - 1);
+                        }
+                        if room_start < app.scroll_offset {
+                            app.scroll_offset = room_start;
+                        }
                     }
 
                     office::render(
@@ -1072,6 +1083,12 @@ async fn run_app(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Resul
                         app.scroll_offset,
                         app.anim_frame,
                     );
+
+                    // Clamp selected to valid range
+                    let count = office::agent_count(&app.sessions, &subagent_data);
+                    if count > 0 && app.selected >= count {
+                        app.selected = count - 1;
+                    }
                 }
             }
 
@@ -1106,16 +1123,7 @@ async fn run_app(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Resul
                         Action::Top => app.move_top(),
                         Action::Bottom => app.move_bottom(),
                         Action::ToggleCollapse => app.toggle_current_session(),
-                        Action::SwitchViewLeft => {
-                            app.view_mode = match app.view_mode {
-                                ViewMode::Office => ViewMode::Tree,
-                                ViewMode::Tree => ViewMode::Office,
-                            };
-                            app.selected = 0;
-                            app.scroll_offset = 0;
-                            app.user_navigated = false;
-                        }
-                        Action::SwitchViewRight => {
+                        Action::ToggleView => {
                             app.view_mode = match app.view_mode {
                                 ViewMode::Tree => ViewMode::Office,
                                 ViewMode::Office => ViewMode::Tree,

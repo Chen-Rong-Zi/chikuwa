@@ -28,8 +28,8 @@ pub fn handle_key(key: KeyEvent) -> Action {
             Action::ToggleCollapse
         }
         KeyCode::Char('k') | KeyCode::Up => Action::Up,
-        KeyCode::Char('h') | KeyCode::Left => Action::SwitchViewLeft,
-        KeyCode::Char('l') | KeyCode::Right => Action::SwitchViewRight,
+        KeyCode::Char('h') | KeyCode::Left => Action::ToggleView,
+        KeyCode::Char('l') | KeyCode::Right => Action::ToggleView,
         KeyCode::Enter | KeyCode::Char(' ') => Action::Select,
         KeyCode::Char('g') => Action::Top,
         KeyCode::Char('G') => Action::Bottom,
@@ -46,8 +46,7 @@ pub enum Action {
     Top,
     Bottom,
     ToggleCollapse,
-    SwitchViewLeft,
-    SwitchViewRight,
+    ToggleView,
     None,
 }
 
@@ -132,10 +131,10 @@ mod tests {
     }
 
     #[test]
-    fn test_switch_view_hl() {
-        assert_eq!(handle_key(key(KeyCode::Char('h'))), Action::SwitchViewLeft);
-        assert_eq!(handle_key(key(KeyCode::Char('l'))), Action::SwitchViewRight);
-        assert_eq!(handle_key(key(KeyCode::Left)), Action::SwitchViewLeft);
-        assert_eq!(handle_key(key(KeyCode::Right)), Action::SwitchViewRight);
+    fn test_toggle_view_hl() {
+        assert_eq!(handle_key(key(KeyCode::Char('h'))), Action::ToggleView);
+        assert_eq!(handle_key(key(KeyCode::Char('l'))), Action::ToggleView);
+        assert_eq!(handle_key(key(KeyCode::Left)), Action::ToggleView);
+        assert_eq!(handle_key(key(KeyCode::Right)), Action::ToggleView);
     }
 }
