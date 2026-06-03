@@ -635,11 +635,9 @@ impl App {
     async fn handle_select(&mut self) -> Result<()> {
         if self.view_mode == ViewMode::Office {
             let subagent_data = self.build_subagent_data();
-            if let Some(target) = office::selected_tmux_target(
-                &self.sessions,
-                &subagent_data,
-                self.selected,
-            ) {
+            if let Some(target) =
+                office::selected_tmux_target(&self.sessions, &subagent_data, self.selected)
+            {
                 self.user_navigated = false;
                 if let Err(e) = tmux_client::switch_to(&target).await {
                     eprintln!("Warning: failed to switch tmux: {}", e);
@@ -1030,11 +1028,8 @@ async fn run_app(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Resul
                         app.pending_center = false;
                     } else {
                         // Default: just ensure selected is visible
-                        let selected_visual = tree::item_to_visual_row(
-                            &app.tree_items,
-                            app.selected,
-                            app.last_width,
-                        );
+                        let selected_visual =
+                            tree::item_to_visual_row(&app.tree_items, app.selected, app.last_width);
                         if selected_visual >= app.scroll_offset + visible_height {
                             app.scroll_offset = selected_visual.saturating_sub(visible_height - 1);
                         }

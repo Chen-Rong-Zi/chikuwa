@@ -11,6 +11,7 @@ use crate::tmux::types::TmuxSession;
 use crate::ui::theme;
 
 /// An agent entry for the office view (pre-computed from session data).
+#[allow(dead_code)]
 struct AgentEntry {
     pane_id: String,
     tmux_target: String,
@@ -254,13 +255,7 @@ fn render_agent_room(
     let mut lines = Vec::new();
 
     // Room top border: ┌── 🤖 Agent Name ──── Status ──┐
-    let name_text = format!(
-        "🤖 {}",
-        agent
-            .hook_event_name
-            .as_deref()
-            .unwrap_or("Agent")
-    );
+    let name_text = format!("🤖 {}", agent.hook_event_name.as_deref().unwrap_or("Agent"));
     let status_text = format!("{} {}", status_emoji, status_label);
     let name_width = name_text.width();
     let status_width = status_text.width();
@@ -289,7 +284,7 @@ fn render_agent_room(
             format!("{} {}", theme::ICON_TOOL, tool_name)
         }
     } else if let Some(ref emoji) = agent.event_emoji {
-        format!("{}", emoji)
+        emoji.to_string()
     } else {
         "idle".to_string()
     };
@@ -408,10 +403,7 @@ fn render_agent_room(
         let comp_line = format!("  └─ ✅ {} completed", completed_count);
         let mut comp_spans = vec![
             Span::styled("│ ".to_string(), border_style),
-            Span::styled(
-                comp_line,
-                Style::default().fg(Color::Rgb(0x60, 0x60, 0x60)),
-            ),
+            Span::styled(comp_line, Style::default().fg(Color::Rgb(0x60, 0x60, 0x60))),
         ];
         let used: usize = comp_spans.iter().map(|s| s.content.width()).sum();
         let pad = content_width.saturating_sub(used + 1);
