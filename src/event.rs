@@ -24,6 +24,9 @@ pub fn handle_key(key: KeyEvent) -> Action {
         KeyCode::Char('q') => Action::Quit,
         KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => Action::Quit,
         KeyCode::Char('j') | KeyCode::Down => Action::Down,
+        KeyCode::Char('k') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+            Action::ToggleCollapse
+        }
         KeyCode::Char('k') | KeyCode::Up => Action::Up,
         KeyCode::Enter | KeyCode::Char(' ') => Action::Select,
         KeyCode::Char('g') => Action::Top,
@@ -40,6 +43,7 @@ pub enum Action {
     Select,
     Top,
     Bottom,
+    ToggleCollapse,
     None,
 }
 
@@ -111,5 +115,15 @@ mod tests {
     fn test_unknown_key() {
         assert_eq!(handle_key(key(KeyCode::Char('x'))), Action::None);
         assert_eq!(handle_key(key(KeyCode::F(1))), Action::None);
+    }
+
+    #[test]
+    fn test_toggle_collapse_ctrl_k() {
+        assert_eq!(
+            handle_key(key_with_mod(KeyCode::Char('k'), KeyModifiers::CONTROL)),
+            Action::ToggleCollapse
+        );
+        // Plain 'k' is still Up
+        assert_eq!(handle_key(key(KeyCode::Char('k'))), Action::Up);
     }
 }

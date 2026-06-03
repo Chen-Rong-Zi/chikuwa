@@ -617,6 +617,31 @@ impl App {
 
         Ok(())
     }
+
+    /// Toggle collapse/expand for the session that the currently selected item belongs to.
+    fn toggle_current_session(&mut self) {
+        if self.tree_items.is_empty() {
+            return;
+        }
+
+        // Find the session name for the current selected item by scanning backward
+        let mut session_name: Option<String> = None;
+        for i in (0..=self.selected).rev() {
+            if let tree::TreeItem::Session { name, .. } = &self.tree_items[i] {
+                session_name = Some(name.clone());
+                break;
+            }
+        }
+
+        if let Some(name) = session_name {
+            if self.collapsed.contains(&name) {
+                self.collapsed.remove(&name);
+            } else {
+                self.collapsed.insert(name);
+            }
+            self.rebuild_tree();
+        }
+    }
 }
 
 /// Run the TUI application.
@@ -981,6 +1006,7 @@ async fn run_app(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Resul
                         Action::Select => app.handle_select().await?,
                         Action::Top => app.move_top(),
                         Action::Bottom => app.move_bottom(),
+                        Action::ToggleCollapse => app.toggle_current_session(),
                         Action::None => {}
                     }
                 }
