@@ -581,11 +581,14 @@ impl App {
         match entry {
             std::collections::hash_map::Entry::Occupied(mut e) => {
                 let info = e.get_mut();
-                info.state = SubagentStatus::from(state.state);
+                let event = state.hook_event_name.as_deref().unwrap_or("");
+                // PostToolUse is Silent: only update tools, preserve visual state
+                if event != "PostToolUse" {
+                    info.state = SubagentStatus::from(state.state);
+                }
                 info.updated_at = state.updated_at;
 
                 // Merge tools based on event
-                let event = state.hook_event_name.as_deref().unwrap_or("");
                 match event {
                     "PreToolUse" => {
                         if let Some(tool) = state.tools.first() {
@@ -1212,10 +1215,12 @@ async fn run_app(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Resul
                                 .session_id
                                 .clone()
                                 .or_else(|| existing.session_id.clone());
+                            let event = state.hook_event_name.as_deref().unwrap_or("").to_string();
+                            // PostToolUse is Silent: only update tools list, preserve visual state
+                            let is_silent = event == "PostToolUse";
                             // Merge active tools list based on hook event
                             let tools = if state.state == AgentStatus::Running {
-                                let event = state.hook_event_name.as_deref().unwrap_or("");
-                                match event {
+                                match event.as_str() {
                                     "PreToolUse" => {
                                         let mut tools = existing.tools.clone();
                                         // Don't add "Agent" tool to main agent - it spawns subagents
@@ -1249,9 +1254,28 @@ async fn run_app(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Resul
                             let mut merged = state;
                             merged.session_id = session_id;
                             merged.tools = tools;
+                            if is_silent {
+                                // Silent mode: preserve visual state, only update tools
+                                merged.event_emoji = existing.event_emoji.clone();
+                                merged.hook_event_name = existing.hook_event_name.clone();
+                                merged.tool_name = existing.tool_name.clone();
+                                merged.tool_detail = existing.tool_detail.clone();
+                                merged.state = existing.state;
+                                merged.failure_detail = existing.failure_detail.clone();
+                            } else if event != "PostToolUseFailure" {
+                                // Non-failure events clear the failure detail
+                                merged.failure_detail = None;
+                            }
                             app.agent_states.insert(merged.tmux_pane.clone(), merged);
                         } else {
-                            app.agent_states.insert(state.tmux_pane.clone(), state);
+                            // New agent — clear failure_detail for non-failure events
+                            if state.hook_event_name.as_deref() != Some("PostToolUseFailure") {
+                                let mut state = state;
+                                state.failure_detail = None;
+                                app.agent_states.insert(state.tmux_pane.clone(), state);
+                            } else {
+                                app.agent_states.insert(state.tmux_pane.clone(), state);
+                            }
                         }
                     }
                     app.merge_agent_states();
@@ -1604,9 +1628,9 @@ mod tests {
 
         let mut app = App::new();
         let state = AgentState {
-            tmux_pane: "%0".to_string(),
+            tmux_pane: "%test_new".to_string(),
             session_id: None,
-            agent_id: Some("abc123".to_string()),
+            agent_id: Some("sub_new_123".to_string()),
             state: crate::agent::state::AgentStatus::Running,
             updated_at: 100,
             hook_event_name: Some("SubagentStart".to_string()),
@@ -1620,9 +1644,9 @@ mod tests {
             }],
         };
 
-        app.merge_subagent_state("%0".to_string(), "abc123".to_string(), state);
+        app.merge_subagent_state("%test_new".to_string(), "sub_new_123".to_string(), state);
 
-        let subagents = app.get_subagents_for_pane("%0");
+        let subagents = app.get_subagents_for_pane("%test_new");
         assert_eq!(subagents.len(), 1);
         assert_eq!(
             subagents[0].description,
@@ -1640,9 +1664,9 @@ mod tests {
 
         // First add a running subagent
         let running_state = AgentState {
-            tmux_pane: "%0".to_string(),
+            tmux_pane: "%test_end".to_string(),
             session_id: None,
-            agent_id: Some("abc123".to_string()),
+            agent_id: Some("sub_end_456".to_string()),
             state: crate::agent::state::AgentStatus::Running,
             updated_at: 100,
             hook_event_name: None,
@@ -1652,13 +1676,17 @@ mod tests {
             failure_detail: None,
             tools: vec![],
         };
-        app.merge_subagent_state("%0".to_string(), "abc123".to_string(), running_state);
+        app.merge_subagent_state(
+            "%test_end".to_string(),
+            "sub_end_456".to_string(),
+            running_state,
+        );
 
         // Then end it
         let ended_state = AgentState {
-            tmux_pane: "%0".to_string(),
+            tmux_pane: "%test_end".to_string(),
             session_id: None,
-            agent_id: Some("abc123".to_string()),
+            agent_id: Some("sub_end_456".to_string()),
             state: crate::agent::state::AgentStatus::Ended,
             updated_at: 200,
             hook_event_name: Some("SubagentStop".to_string()),
@@ -1668,9 +1696,13 @@ mod tests {
             failure_detail: None,
             tools: vec![],
         };
-        app.merge_subagent_state("%0".to_string(), "abc123".to_string(), ended_state);
+        app.merge_subagent_state(
+            "%test_end".to_string(),
+            "sub_end_456".to_string(),
+            ended_state,
+        );
 
-        assert_eq!(app.get_subagents_for_pane("%0").len(), 0);
-        assert_eq!(app.get_completed_count("%0"), 1);
+        assert_eq!(app.get_subagents_for_pane("%test_end").len(), 0);
+        assert_eq!(app.get_completed_count("%test_end"), 1);
     }
 }

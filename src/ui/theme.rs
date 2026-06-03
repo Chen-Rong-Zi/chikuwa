@@ -23,6 +23,7 @@ pub const ICON_TERMINAL: &str = "\u{f489}"; //
 pub const ICON_WINDOW: &str = "\u{f10aa}"; // 󱂪
 pub const ICON_BOLT: &str = "\u{f0e7}"; //
 pub const ICON_TOOL: &str = "\u{f0ad}"; //
+pub const ICON_FAILURE: &str = "\u{f00d}"; //  cross
 pub const COLOR_YELLOW: Color = Color::Rgb(0xff, 0xd7, 0x00);
 pub const COLOR_PERMISSION_BG: Color = Color::Rgb(0x3a, 0x1a, 0x3a);
 

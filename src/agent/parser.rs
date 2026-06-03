@@ -42,7 +42,6 @@ struct ClaudeHookInput {
     #[serde(default)]
     tool_input: Option<serde_json::Value>,
     #[serde(default)]
-    #[allow(dead_code)]
     message: Option<String>,
     #[serde(default)]
     cwd: Option<String>,
@@ -305,10 +304,31 @@ impl HookParser for ClaudeHookParser {
             })
         });
 
-        Ok(ParseResult {
-            state,
-            display: DisplayMode::Show,
-        })
+        // Determine display mode and failure detail based on event type
+        let display = match event_name.as_str() {
+            "PostToolUse" => DisplayMode::Silent,
+            "PostToolUseFailure" => {
+                // Extract failure detail from message field, truncated
+                let detail = input
+                    .message
+                    .as_deref()
+                    .filter(|m| !m.is_empty())
+                    .map(|m| {
+                        // Truncate to ~80 chars, respecting char boundaries
+                        if m.chars().count() > 80 {
+                            format!("{}...", m.chars().take(77).collect::<String>())
+                        } else {
+                            m.to_string()
+                        }
+                    })
+                    .or_else(|| input.tool_name.as_ref().map(|n| format!("{} failed", n)));
+                state.failure_detail = detail;
+                DisplayMode::Show
+            }
+            _ => DisplayMode::Show,
+        };
+
+        Ok(ParseResult { state, display })
     }
 }
 
@@ -541,6 +561,72 @@ mod tests {
         let result = parser.parse("%0".to_string(), json).unwrap();
         assert_eq!(result.state.state, AgentStatus::Ended);
         assert_eq!(result.state.event_emoji.as_deref(), Some("🏁"));
+    }
+
+    #[test]
+    fn test_claude_hook_post_tool_use_silent() {
+        let json =
+            r#"{"hook_event_name":"PostToolUse","tool_name":"Bash","tool_input":{"command":"ls"}}"#;
+        let parser = ClaudeHookParser;
+        let result = parser.parse("%0".to_string(), json).unwrap();
+        assert_eq!(result.display, DisplayMode::Silent);
+        assert_eq!(result.state.state, AgentStatus::Running);
+        assert!(result.state.failure_detail.is_none());
+    }
+
+    #[test]
+    fn test_claude_hook_post_tool_use_failure_with_message() {
+        let json = r#"{"hook_event_name":"PostToolUseFailure","tool_name":"Bash","message":"command failed with exit code 1"}"#;
+        let parser = ClaudeHookParser;
+        let result = parser.parse("%0".to_string(), json).unwrap();
+        assert_eq!(result.display, DisplayMode::Show);
+        assert_eq!(result.state.state, AgentStatus::Running);
+        assert_eq!(
+            result.state.failure_detail.as_deref(),
+            Some("command failed with exit code 1")
+        );
+    }
+
+    #[test]
+    fn test_claude_hook_post_tool_use_failure_fallback() {
+        let json = r#"{"hook_event_name":"PostToolUseFailure","tool_name":"Read"}"#;
+        let parser = ClaudeHookParser;
+        let result = parser.parse("%0".to_string(), json).unwrap();
+        assert_eq!(result.display, DisplayMode::Show);
+        assert_eq!(result.state.failure_detail.as_deref(), Some("Read failed"));
+    }
+
+    #[test]
+    fn test_claude_hook_post_tool_use_failure_truncation() {
+        let long_msg = "x".repeat(100);
+        let json = format!(
+            r#"{{"hook_event_name":"PostToolUseFailure","tool_name":"Bash","message":"{}"}}"#,
+            long_msg
+        );
+        let parser = ClaudeHookParser;
+        let result = parser.parse("%0".to_string(), &json).unwrap();
+        let detail = result.state.failure_detail.unwrap();
+        assert!(detail.len() <= 83); // 77 chars + "..." = 80 display + 3 for "..."
+        assert!(detail.ends_with("..."));
+    }
+
+    #[test]
+    fn test_claude_hook_post_tool_use_failure_utf8_truncation() {
+        // Multi-byte characters should not panic during truncation
+        let long_msg = "日本語".repeat(30); // 90 chars, all multi-byte
+        let json = format!(
+            r#"{{"hook_event_name":"PostToolUseFailure","tool_name":"Bash","message":"{}"}}"#,
+            long_msg
+        );
+        let parser = ClaudeHookParser;
+        let result = parser.parse("%0".to_string(), &json).unwrap();
+        assert!(result.state.failure_detail.is_some());
+        assert!(result
+            .state
+            .failure_detail
+            .as_ref()
+            .unwrap()
+            .ends_with("..."));
     }
 
     #[test]

@@ -364,6 +364,27 @@ fn render_agent_room(
         lines.push(Line::from(tool_spans));
     }
 
+    // Failure detail line (red)
+    if let Some(ref failure) = agent.failure_detail {
+        let failure_style = Style::default().fg(theme::COLOR_FAILURE);
+        let mut failure_spans = vec![
+            Span::styled("│ ".to_string(), border_style),
+            Span::styled(
+                format!(" {} {}", theme::ICON_FAILURE, failure),
+                failure_style,
+            ),
+        ];
+        let used: usize = failure_spans.iter().map(|s| s.content.width()).sum();
+        let pad = content_width.saturating_sub(used + 1);
+        failure_spans.push(Span::styled(
+            " ".repeat(pad),
+            Style::default().fg(Color::Reset),
+        ));
+        failure_spans.push(Span::styled("│".to_string(), border_style));
+        apply_bg(&mut failure_spans, bg_color, is_selected);
+        lines.push(Line::from(failure_spans));
+    }
+
     // Duration + summary line
     let duration = format_duration(agent.updated_at);
     let tool_count = if agent.tools.is_empty() {

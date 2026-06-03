@@ -956,6 +956,7 @@ fn agent_status_visual_rows(item: &TreeItem) -> usize {
         _ => return 0,
     };
     1 + agent.tools.len().min(MAX_VISIBLE_TOOLS)
+        + if agent.failure_detail.is_some() { 1 } else { 0 }
 }
 
 /// Render an agent status sub-line (e.g. "· running") for an item.
@@ -1048,6 +1049,28 @@ fn render_bordered_agent_status_sub_lines(
         truncate_spans(&mut tool_spans, content_width);
         result.push(wrap_bordered_line(
             tool_spans,
+            content_width,
+            selected,
+            border_style,
+        ));
+    }
+
+    // Failure detail line (red ❌)
+    if let Some(ref failure) = agent.failure_detail {
+        let failure_style = Style::default().fg(theme::COLOR_FAILURE);
+        let mut failure_spans = vec![
+            Span::styled(
+                format!("{}  ", prefix),
+                Style::default().fg(theme::COLOR_PURPLE),
+            ),
+            Span::styled(
+                format!("{} {}", theme::ICON_FAILURE, failure),
+                failure_style,
+            ),
+        ];
+        truncate_spans(&mut failure_spans, content_width);
+        result.push(wrap_bordered_line(
+            failure_spans,
             content_width,
             selected,
             border_style,
