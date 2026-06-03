@@ -41,7 +41,16 @@ struct ClaudeHookInput {
     tool_name: Option<String>,
     #[serde(default)]
     tool_input: Option<serde_json::Value>,
+    /// PostToolUse: structured tool output. PostToolUseFailure: absent.
     #[serde(default)]
+    #[allow(dead_code)]
+    tool_response: Option<serde_json::Value>,
+    /// PostToolUseFailure: error description string.
+    #[serde(default)]
+    error: Option<String>,
+    /// Notification events: message content.
+    #[serde(default)]
+    #[allow(dead_code)]
     message: Option<String>,
     #[serde(default)]
     cwd: Option<String>,
@@ -308,9 +317,9 @@ impl HookParser for ClaudeHookParser {
         let display = match event_name.as_str() {
             "PostToolUse" => DisplayMode::Silent,
             "PostToolUseFailure" => {
-                // Extract failure detail from message field, truncated
+                // Extract failure detail from error field, truncated
                 let detail = input
-                    .message
+                    .error
                     .as_deref()
                     .filter(|m| !m.is_empty())
                     .map(|m| {
@@ -576,7 +585,7 @@ mod tests {
 
     #[test]
     fn test_claude_hook_post_tool_use_failure_with_message() {
-        let json = r#"{"hook_event_name":"PostToolUseFailure","tool_name":"Bash","message":"command failed with exit code 1"}"#;
+        let json = r#"{"hook_event_name":"PostToolUseFailure","tool_name":"Bash","error":"command failed with exit code 1"}"#;
         let parser = ClaudeHookParser;
         let result = parser.parse("%0".to_string(), json).unwrap();
         assert_eq!(result.display, DisplayMode::Show);
@@ -600,7 +609,7 @@ mod tests {
     fn test_claude_hook_post_tool_use_failure_truncation() {
         let long_msg = "x".repeat(100);
         let json = format!(
-            r#"{{"hook_event_name":"PostToolUseFailure","tool_name":"Bash","message":"{}"}}"#,
+            r#"{{"hook_event_name":"PostToolUseFailure","tool_name":"Bash","error":"{}"}}"#,
             long_msg
         );
         let parser = ClaudeHookParser;
@@ -615,7 +624,7 @@ mod tests {
         // Multi-byte characters should not panic during truncation
         let long_msg = "日本語".repeat(30); // 90 chars, all multi-byte
         let json = format!(
-            r#"{{"hook_event_name":"PostToolUseFailure","tool_name":"Bash","message":"{}"}}"#,
+            r#"{{"hook_event_name":"PostToolUseFailure","tool_name":"Bash","error":"{}"}}"#,
             long_msg
         );
         let parser = ClaudeHookParser;
