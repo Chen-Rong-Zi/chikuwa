@@ -603,8 +603,17 @@ impl App {
                     }
                     "PostToolUse" | "PostToolUseFailure" => {
                         if let Some(removing) = state.tools.first() {
-                            info.tools
-                                .retain(|t| t.name != removing.name || t.detail != removing.detail);
+                            // Try exact match first (name + detail), fall back to name-only
+                            if let Some(pos) = info
+                                .tools
+                                .iter()
+                                .position(|t| {
+                                    t.name == removing.name && t.detail == removing.detail
+                                })
+                                .or_else(|| info.tools.iter().position(|t| t.name == removing.name))
+                            {
+                                info.tools.remove(pos);
+                            }
                         }
                     }
                     _ => {}
@@ -1236,10 +1245,20 @@ async fn run_app(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Resul
                                         if let Some(removing) = state.tools.first() {
                                             // Skip if removing Agent tool - it's not in the list
                                             if removing.name != "Agent" {
-                                                if let Some(pos) = tools.iter().position(|t| {
-                                                    t.name == removing.name
-                                                        && t.detail == removing.detail
-                                                }) {
+                                                // Try exact match first (name + detail)
+                                                let pos = tools
+                                                    .iter()
+                                                    .position(|t| {
+                                                        t.name == removing.name
+                                                            && t.detail == removing.detail
+                                                    })
+                                                    // Fall back to name-only match
+                                                    .or_else(|| {
+                                                        tools
+                                                            .iter()
+                                                            .position(|t| t.name == removing.name)
+                                                    });
+                                                if let Some(pos) = pos {
                                                     tools.remove(pos);
                                                 }
                                             }
