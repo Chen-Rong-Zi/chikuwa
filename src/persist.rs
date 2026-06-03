@@ -113,6 +113,7 @@ pub fn load_agent_states() -> HashMap<String, AgentState> {
 /// Compact the agent states JSONL file by rewriting it with only the current
 /// live states. Call this periodically (e.g., on TUI startup) to prevent
 /// unbounded file growth.
+#[allow(dead_code)]
 pub fn compact_agent_states_to(
     states: &HashMap<String, AgentState>,
     path: &Path,
@@ -131,6 +132,7 @@ pub fn compact_agent_states_to(
 }
 
 /// Compact agent states at the default path.
+#[allow(dead_code)]
 pub fn compact_agent_states(states: &HashMap<String, AgentState>) -> anyhow::Result<()> {
     compact_agent_states_to(states, &agent_states_path())
 }

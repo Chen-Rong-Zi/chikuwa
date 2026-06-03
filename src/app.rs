@@ -319,6 +319,11 @@ impl App {
     fn rebuild_tree(&mut self) {
         self.tree_items = tree::flatten(&self.sessions, &self.collapsed);
 
+        // Skip auto-follow in office view — selected is an agent index, not a tree index
+        if self.view_mode == ViewMode::Office {
+            return;
+        }
+
         // On first selection, try to select the pane where chikuwa is running
         if self.first_selection {
             if let Ok(pane_id) = std::env::var("TMUX_PANE") {
@@ -732,11 +737,6 @@ pub async fn run() -> Result<()> {
 async fn run_app(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Result<()> {
     let mut app = App::new();
 
-    // Compact the JSONL log on startup (remove stale/redundant entries)
-    if let Err(e) = persist::compact_agent_states(&app.agent_states) {
-        eprintln!("Warning: failed to compact agent states: {}", e);
-    }
-
     // Initial data fetch
     app.refresh().await?;
 
@@ -1130,7 +1130,7 @@ async fn run_app(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Resul
                             };
                             app.selected = 0;
                             app.scroll_offset = 0;
-                            app.user_navigated = false;
+                            app.user_navigated = true;
                         }
                         Action::None => {}
                     }
@@ -1195,11 +1195,6 @@ async fn run_app(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Resul
                         Some(std::time::Instant::now() + Duration::from_secs(next_secs));
                 }
                 AppEvent::AgentStateUpdate(state) => {
-                    // Persist to JSONL before state is consumed
-                    if let Err(e) = persist::append_agent_state(&state) {
-                        eprintln!("Warning: failed to persist agent state: {}", e);
-                    }
-
                     // Determine if this is a subagent event
                     if let Some(ref agent_id) = state.agent_id {
                         // Subagent event
