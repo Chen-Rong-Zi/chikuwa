@@ -46,6 +46,8 @@ pub struct AgentState {
     pub tool_name: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tool_detail: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub failure_detail: Option<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub tools: Vec<ToolInfo>,
 }
@@ -62,6 +64,7 @@ impl AgentState {
             event_emoji: None,
             tool_name: None,
             tool_detail: None,
+            failure_detail: None,
             tools: Vec::new(),
         }
     }
@@ -136,6 +139,7 @@ mod tests {
             event_emoji: None,
             tool_name: None,
             tool_detail: None,
+            failure_detail: None,
             tools: Vec::new(),
         };
 

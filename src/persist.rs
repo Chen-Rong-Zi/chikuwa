@@ -400,6 +400,7 @@ mod tests {
             event_emoji: None,
             tool_name: None,
             tool_detail: None,
+            failure_detail: None,
             tools: Vec::new(),
         };
         let mut ended = running.clone();
@@ -440,6 +441,7 @@ mod tests {
             event_emoji: None,
             tool_name: None,
             tool_detail: None,
+            failure_detail: None,
             tools: Vec::new(),
         };
         let mut state2 = state1.clone();
@@ -485,6 +487,7 @@ mod tests {
             event_emoji: None,
             tool_name: None,
             tool_detail: None,
+            failure_detail: None,
             tools: Vec::new(),
         };
         let mut stale = fresh.clone();
@@ -570,6 +573,7 @@ mod tests {
                 event_emoji: None,
                 tool_name: None,
                 tool_detail: None,
+                failure_detail: None,
                 tools: Vec::new(),
             },
         );

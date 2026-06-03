@@ -30,6 +30,7 @@ pub const COLOR_PERMISSION_BG: Color = Color::Rgb(0x3a, 0x1a, 0x3a);
 pub const COLOR_DIM: Color = Color::Rgb(0x7a, 0x7a, 0x7a);
 pub const COLOR_DIM_DARK: Color = Color::Rgb(0x60, 0x60, 0x60);
 pub const COLOR_SELECTED_BG: Color = Color::DarkGray;
+pub const COLOR_FAILURE: Color = Color::Rgb(0xff, 0x44, 0x44);
 /// Return a color for a usage utilization value (0.0–1.0).
 pub fn usage_color(utilization: f64) -> Color {
     if utilization < 0.8 {

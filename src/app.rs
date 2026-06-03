@@ -1613,6 +1613,7 @@ mod tests {
             event_emoji: None,
             tool_name: Some("Task".to_string()),
             tool_detail: None,
+            failure_detail: None,
             tools: vec![crate::agent::state::ToolInfo {
                 name: "Task".to_string(),
                 detail: Some("Search codebase".to_string()),
@@ -1648,6 +1649,7 @@ mod tests {
             event_emoji: None,
             tool_name: None,
             tool_detail: None,
+            failure_detail: None,
             tools: vec![],
         };
         app.merge_subagent_state("%0".to_string(), "abc123".to_string(), running_state);
@@ -1663,6 +1665,7 @@ mod tests {
             event_emoji: None,
             tool_name: None,
             tool_detail: None,
+            failure_detail: None,
             tools: vec![],
         };
         app.merge_subagent_state("%0".to_string(), "abc123".to_string(), ended_state);

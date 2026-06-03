@@ -494,6 +494,7 @@ mod tests {
             event_emoji: Some("🔧".to_string()),
             tool_name: Some("Read".to_string()),
             tool_detail: Some("src/main.rs".to_string()),
+            failure_detail: None,
             tools: vec![ToolInfo {
                 name: "Read".to_string(),
                 detail: Some("src/main.rs".to_string()),

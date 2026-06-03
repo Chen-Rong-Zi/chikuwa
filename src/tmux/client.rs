@@ -288,6 +288,7 @@ mod tests {
                 event_emoji: None,
                 tool_name: None,
                 tool_detail: None,
+                failure_detail: None,
                 tools: Vec::new(),
             },
         );
