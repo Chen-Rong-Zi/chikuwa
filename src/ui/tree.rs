@@ -1004,6 +1004,10 @@ fn render_bordered_agent_status_sub_lines(
         ),
         Span::styled(format!(" {}", status_label), dim_style),
     ];
+    // Add event emoji if available
+    if let Some(ref emoji) = agent.event_emoji {
+        status_spans.push(Span::styled(format!(" {}", emoji), dim_style));
+    }
     if !agent.tools.is_empty() {
         let tool_count_label = if agent.tools.len() == 1 {
             " (1 tool)".to_string()
@@ -1601,6 +1605,7 @@ mod tests {
                                 state: AgentStatus::Running,
                                 updated_at: 100,
                                 hook_event_name: None,
+                                event_emoji: None,
                                 tool_name: None,
                                 tool_detail: None,
                                 tools: Vec::new(),

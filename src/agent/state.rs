@@ -41,6 +41,8 @@ pub struct AgentState {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub hook_event_name: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub event_emoji: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tool_name: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tool_detail: Option<String>,
@@ -57,6 +59,7 @@ impl AgentState {
             state,
             updated_at: now(),
             hook_event_name: None,
+            event_emoji: None,
             tool_name: None,
             tool_detail: None,
             tools: Vec::new(),
@@ -130,6 +133,7 @@ mod tests {
             state: AgentStatus::Running,
             updated_at: 1234567890,
             hook_event_name: None,
+            event_emoji: None,
             tool_name: None,
             tool_detail: None,
             tools: Vec::new(),
