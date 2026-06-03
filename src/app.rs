@@ -370,13 +370,22 @@ impl App {
     fn move_up(&mut self) {
         self.user_navigated = true;
         self.pending_center = true;
-        let mut idx = self.selected;
-        while idx > 0 {
-            idx -= 1;
-            if self.tree_items[idx].is_selectable() {
-                self.selected = idx;
-                self.ensure_visible();
-                return;
+        match self.view_mode {
+            ViewMode::Tree => {
+                let mut idx = self.selected;
+                while idx > 0 {
+                    idx -= 1;
+                    if self.tree_items[idx].is_selectable() {
+                        self.selected = idx;
+                        self.ensure_visible();
+                        return;
+                    }
+                }
+            }
+            ViewMode::Office => {
+                if self.selected > 0 {
+                    self.selected -= 1;
+                }
             }
         }
     }
@@ -384,13 +393,24 @@ impl App {
     fn move_down(&mut self) {
         self.user_navigated = true;
         self.pending_center = true;
-        let mut idx = self.selected;
-        while idx < self.tree_items.len().saturating_sub(1) {
-            idx += 1;
-            if self.tree_items[idx].is_selectable() {
-                self.selected = idx;
-                self.ensure_visible();
-                return;
+        match self.view_mode {
+            ViewMode::Tree => {
+                let mut idx = self.selected;
+                while idx < self.tree_items.len().saturating_sub(1) {
+                    idx += 1;
+                    if self.tree_items[idx].is_selectable() {
+                        self.selected = idx;
+                        self.ensure_visible();
+                        return;
+                    }
+                }
+            }
+            ViewMode::Office => {
+                let subagent_data = self.build_subagent_data();
+                let max = office::agent_count(&self.sessions, &subagent_data).saturating_sub(1);
+                if self.selected < max {
+                    self.selected += 1;
+                }
             }
         }
     }
@@ -398,20 +418,36 @@ impl App {
     fn move_top(&mut self) {
         self.user_navigated = true;
         self.pending_center = true;
-        if let Some(idx) = self.tree_items.iter().position(|item| item.is_selectable()) {
-            self.selected = idx;
+        match self.view_mode {
+            ViewMode::Tree => {
+                if let Some(idx) = self.tree_items.iter().position(|item| item.is_selectable()) {
+                    self.selected = idx;
+                }
+            }
+            ViewMode::Office => {
+                self.selected = 0;
+            }
         }
     }
 
     fn move_bottom(&mut self) {
         self.user_navigated = true;
         self.pending_center = true;
-        if let Some(idx) = self
-            .tree_items
-            .iter()
-            .rposition(|item| item.is_selectable())
-        {
-            self.selected = idx;
+        match self.view_mode {
+            ViewMode::Tree => {
+                if let Some(idx) = self
+                    .tree_items
+                    .iter()
+                    .rposition(|item| item.is_selectable())
+                {
+                    self.selected = idx;
+                }
+            }
+            ViewMode::Office => {
+                let subagent_data = self.build_subagent_data();
+                let max = office::agent_count(&self.sessions, &subagent_data).saturating_sub(1);
+                self.selected = max;
+            }
         }
     }
 
@@ -597,6 +633,22 @@ impl App {
     }
 
     async fn handle_select(&mut self) -> Result<()> {
+        if self.view_mode == ViewMode::Office {
+            let subagent_data = self.build_subagent_data();
+            if let Some(target) = office::selected_tmux_target(
+                &self.sessions,
+                &subagent_data,
+                self.selected,
+            ) {
+                self.user_navigated = false;
+                if let Err(e) = tmux_client::switch_to(&target).await {
+                    eprintln!("Warning: failed to switch tmux: {}", e);
+                }
+                self.refresh().await?;
+            }
+            return Ok(());
+        }
+
         if self.tree_items.is_empty() {
             return Ok(());
         }
@@ -927,7 +979,13 @@ async fn run_app(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Resul
                     Span::styled("  ", white_style),
                 ];
                 spans.extend(chikuwa_spans);
-                spans.push(Span::styled("  ", white_style));
+                spans.push(Span::styled(
+                    match app.view_mode {
+                        ViewMode::Tree => "  ",
+                        ViewMode::Office => ":office  ",
+                    },
+                    white_style,
+                ));
                 spans.push(Span::styled(theme::ICON_BOLT, bolt_style));
                 spans.push(Span::styled(" 🐧", white_style));
                 spans
@@ -941,7 +999,13 @@ async fn run_app(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Resul
                 vec![
                     Span::styled("🐧 ", white_style),
                     Span::styled(theme::ICON_BOLT, bolt_style),
-                    Span::styled("  chikuwa  ", white_style),
+                    Span::styled(
+                        match app.view_mode {
+                            ViewMode::Tree => "  chikuwa  ",
+                            ViewMode::Office => "  chikuwa:office  ",
+                        },
+                        white_style,
+                    ),
                     Span::styled(theme::ICON_BOLT, bolt_style),
                     Span::styled(" 🐧", white_style),
                 ]
@@ -957,32 +1021,64 @@ async fn run_app(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Resul
             let visible_height = chunks[1].height as usize;
             app.last_width = chunks[1].width;
 
-            if app.pending_center {
-                app.center_selection(visible_height);
-                app.pending_center = false;
-            } else {
-                // Default: just ensure selected is visible
-                let selected_visual =
-                    tree::item_to_visual_row(&app.tree_items, app.selected, app.last_width);
-                if selected_visual >= app.scroll_offset + visible_height {
-                    app.scroll_offset = selected_visual.saturating_sub(visible_height - 1);
+            let subagent_data = app.build_subagent_data();
+
+            match app.view_mode {
+                ViewMode::Tree => {
+                    if app.pending_center {
+                        app.center_selection(visible_height);
+                        app.pending_center = false;
+                    } else {
+                        // Default: just ensure selected is visible
+                        let selected_visual = tree::item_to_visual_row(
+                            &app.tree_items,
+                            app.selected,
+                            app.last_width,
+                        );
+                        if selected_visual >= app.scroll_offset + visible_height {
+                            app.scroll_offset = selected_visual.saturating_sub(visible_height - 1);
+                        }
+                        if selected_visual < app.scroll_offset {
+                            app.scroll_offset = selected_visual;
+                        }
+                    }
+
+                    tree::render(
+                        f,
+                        chunks[1],
+                        &app.tree_items,
+                        app.selected,
+                        app.scroll_offset,
+                        app.anim_frame,
+                        &subagent_data,
+                    );
                 }
-                if selected_visual < app.scroll_offset {
-                    app.scroll_offset = selected_visual;
+                ViewMode::Office => {
+                    // Simple scroll for office view: ensure selected item is visible
+                    let count = office::agent_count(&app.sessions, &subagent_data);
+                    if app.selected >= count {
+                        app.selected = count.saturating_sub(1);
+                    }
+                    if app.pending_center {
+                        // Approximate: each agent entry is ~6-10 lines, center roughly
+                        let approx_lines_per = 7;
+                        let center_line = app.selected * approx_lines_per + approx_lines_per / 2;
+                        let desired_offset = center_line.saturating_sub(visible_height / 2);
+                        app.scroll_offset = desired_offset;
+                        app.pending_center = false;
+                    }
+
+                    office::render(
+                        f,
+                        chunks[1],
+                        &app.sessions,
+                        &subagent_data,
+                        app.selected,
+                        app.scroll_offset,
+                        app.anim_frame,
+                    );
                 }
             }
-
-            // Render tree with inline agent status on single-pane windows
-            let subagent_data = app.build_subagent_data();
-            tree::render(
-                f,
-                chunks[1],
-                &app.tree_items,
-                app.selected,
-                app.scroll_offset,
-                app.anim_frame,
-                &subagent_data,
-            );
 
             // Render status bar
             let usage_remaining = app.usage_next_fetch.map(|t| {
