@@ -2,6 +2,7 @@ use std::io::Read;
 
 use anyhow::{Context, Result};
 
+use crate::agent::parser::DisplayMode;
 use crate::agent::{ClaudeHookParser, HookParser};
 use crate::ipc;
 
@@ -18,7 +19,7 @@ pub async fn run() -> Result<()> {
     let parser = ClaudeHookParser;
     let result = parser.parse(pane_id, &stdin_buf)?;
 
-    if result.suppress {
+    if result.display == DisplayMode::Suppress {
         return Ok(());
     }
 

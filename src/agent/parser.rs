@@ -3,11 +3,22 @@ use serde::Deserialize;
 
 use super::state::{AgentState, AgentStatus, ToolInfo};
 
+/// How the TUI should display a parsed event.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DisplayMode {
+    /// Normal display — update state, emoji, tools, everything
+    Show,
+    /// Update tools list only — don't change visual state (emoji, status, tool_name)
+    Silent,
+    /// Ignore completely — don't send to TUI
+    Suppress,
+}
+
 /// Result of parsing a hook event.
 pub struct ParseResult {
     pub state: AgentState,
-    /// Whether this event should be suppressed (not sent to TUI).
-    pub suppress: bool,
+    /// How the TUI should display this event.
+    pub display: DisplayMode,
 }
 
 /// Trait for parsing raw hook input into AgentState.
@@ -246,7 +257,7 @@ impl HookParser for ClaudeHookParser {
                 // Non-permission notifications: suppress (don't update TUI state)
                 return Ok(ParseResult {
                     state: AgentState::new(pane_id, AgentStatus::Running),
-                    suppress: true,
+                    display: DisplayMode::Suppress,
                 });
             }
         } else {
@@ -260,7 +271,7 @@ impl HookParser for ClaudeHookParser {
                 eprintln!("[chikuwa hook] unknown event '{}', ignoring", event_name);
                 return Ok(ParseResult {
                     state: AgentState::new(pane_id, AgentStatus::Running),
-                    suppress: true,
+                    display: DisplayMode::Suppress,
                 });
             }
         };
@@ -296,7 +307,7 @@ impl HookParser for ClaudeHookParser {
 
         Ok(ParseResult {
             state,
-            suppress: false,
+            display: DisplayMode::Show,
         })
     }
 }
@@ -336,7 +347,7 @@ impl HookParser for OpenCodeHookParser {
                 );
                 return Ok(ParseResult {
                     state: AgentState::new(pane_id, AgentStatus::Running),
-                    suppress: true,
+                    display: DisplayMode::Suppress,
                 });
             }
         };
@@ -353,7 +364,7 @@ impl HookParser for OpenCodeHookParser {
 
         Ok(ParseResult {
             state,
-            suppress: false,
+            display: DisplayMode::Show,
         })
     }
 }
@@ -367,7 +378,7 @@ mod tests {
         let json = r#"{"hook_event_name":"SessionStart","session_id":"abc123"}"#;
         let parser = ClaudeHookParser;
         let result = parser.parse("%0".to_string(), json).unwrap();
-        assert!(!result.suppress);
+        assert!(result.display == DisplayMode::Show);
         assert_eq!(result.state.state, AgentStatus::Started);
         assert_eq!(result.state.event_emoji.as_deref(), Some("🚀"));
         assert_eq!(result.state.session_id.as_deref(), Some("abc123"));
@@ -378,7 +389,7 @@ mod tests {
         let json = r#"{"hook_event_name":"SessionEnd"}"#;
         let parser = ClaudeHookParser;
         let result = parser.parse("%0".to_string(), json).unwrap();
-        assert!(!result.suppress);
+        assert!(result.display == DisplayMode::Show);
         assert_eq!(result.state.state, AgentStatus::Ended);
         assert_eq!(result.state.event_emoji.as_deref(), Some("🏁"));
     }
@@ -388,7 +399,7 @@ mod tests {
         let json = r#"{"hook_event_name":"PreToolUse","tool_name":"Bash","tool_input":{"command":"ls -la"}}"#;
         let parser = ClaudeHookParser;
         let result = parser.parse("%0".to_string(), json).unwrap();
-        assert!(!result.suppress);
+        assert!(result.display == DisplayMode::Show);
         assert_eq!(result.state.state, AgentStatus::Running);
         assert_eq!(result.state.event_emoji.as_deref(), Some("🔧"));
         assert_eq!(result.state.tools.len(), 1);
@@ -401,7 +412,7 @@ mod tests {
         let json = r#"{"hook_event_name":"Notification","message":"permission_prompt foo"}"#;
         let parser = ClaudeHookParser;
         let result = parser.parse("%0".to_string(), json).unwrap();
-        assert!(!result.suppress);
+        assert!(result.display == DisplayMode::Show);
         assert_eq!(result.state.state, AgentStatus::Permission);
         assert_eq!(result.state.event_emoji.as_deref(), Some("🔐"));
     }
@@ -411,7 +422,7 @@ mod tests {
         let json = r#"{"hook_event_name":"Notification","message":"some info"}"#;
         let parser = ClaudeHookParser;
         let result = parser.parse("%0".to_string(), json).unwrap();
-        assert!(result.suppress);
+        assert!(result.display == DisplayMode::Suppress);
     }
 
     #[test]
@@ -419,7 +430,7 @@ mod tests {
         let json = r#"{"hook_event_name":"FutureEvent"}"#;
         let parser = ClaudeHookParser;
         let result = parser.parse("%0".to_string(), json).unwrap();
-        assert!(result.suppress);
+        assert!(result.display == DisplayMode::Suppress);
     }
 
     #[test]
@@ -518,7 +529,7 @@ mod tests {
         let json = r#"{"type":"file_edited","file_path":"/src/main.rs","cwd":"/project"}"#;
         let parser = OpenCodeHookParser;
         let result = parser.parse("%0".to_string(), json).unwrap();
-        assert!(!result.suppress);
+        assert!(result.display == DisplayMode::Show);
         assert_eq!(result.state.state, AgentStatus::Running);
         assert_eq!(result.state.event_emoji.as_deref(), Some("📝"));
     }
