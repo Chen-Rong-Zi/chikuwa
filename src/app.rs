@@ -769,7 +769,7 @@ async fn run_app(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Resul
         // Use catch_unwind to handle potential panics in crossterm event parsing
         // (e.g., integer overflow in parse_csi_sgr_mouse with malformed sequences)
         let poll_result =
-            std::panic::catch_unwind(|| crossterm::event::poll(Duration::from_millis(100)));
+            std::panic::catch_unwind(|| crossterm::event::poll(Duration::from_secs(2)));
 
         match poll_result {
             Ok(Ok(true)) => {
