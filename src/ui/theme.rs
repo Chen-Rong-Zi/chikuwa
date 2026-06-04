@@ -173,3 +173,144 @@ pub fn status_style(status: &AgentStatus, session_attached: bool) -> Style {
 pub fn branch_style() -> Style {
     Style::default().fg(COLOR_LIGHT_PURPLE)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_tool_spinner_cycles() {
+        assert_eq!(tool_spinner(0), "◐");
+        assert_eq!(tool_spinner(1), "◓");
+        assert_eq!(tool_spinner(2), "◑");
+        assert_eq!(tool_spinner(3), "◒");
+        assert_eq!(tool_spinner(4), "◐"); // wraps
+    }
+
+    #[test]
+    fn test_agent_face_emoji_started_static() {
+        assert_eq!(
+            agent_face_emoji(&AgentStatus::Started, false, 0, 0),
+            "🟢"
+        );
+        assert_eq!(
+            agent_face_emoji(&AgentStatus::Started, false, 1, 100),
+            "🟢"
+        );
+    }
+
+    #[test]
+    fn test_agent_face_emoji_running_animated() {
+        assert_eq!(
+            agent_face_emoji(&AgentStatus::Running, false, 0, 0),
+            "⚙️"
+        );
+        assert_eq!(
+            agent_face_emoji(&AgentStatus::Running, false, 1, 0),
+            "🔧"
+        );
+    }
+
+    #[test]
+    fn test_agent_face_emoji_permission_escalation() {
+        // 0-30s: mild
+        assert_eq!(
+            agent_face_emoji(&AgentStatus::Permission, false, 0, 0),
+            "🥺✋"
+        );
+        assert_eq!(
+            agent_face_emoji(&AgentStatus::Permission, false, 1, 29),
+            "🙁🤚"
+        );
+        // 30-60s: urgent
+        assert_eq!(
+            agent_face_emoji(&AgentStatus::Permission, false, 0, 30),
+            "😯🙋"
+        );
+        assert_eq!(
+            agent_face_emoji(&AgentStatus::Permission, false, 1, 59),
+            "😫🙋"
+        );
+        // 60s+: critical
+        assert_eq!(
+            agent_face_emoji(&AgentStatus::Permission, false, 0, 60),
+            "😫🙋"
+        );
+        assert_eq!(
+            agent_face_emoji(&AgentStatus::Permission, false, 1, 120),
+            "😫🙋‍♂️"
+        );
+    }
+
+    #[test]
+    fn test_agent_face_emoji_waiting_escalation() {
+        // 0-30s: light drowsiness
+        assert_eq!(
+            agent_face_emoji(&AgentStatus::Waiting, false, 0, 0),
+            "😴"
+        );
+        assert_eq!(
+            agent_face_emoji(&AgentStatus::Waiting, false, 1, 29),
+            "😪"
+        );
+        // 30-90s: yawning
+        assert_eq!(
+            agent_face_emoji(&AgentStatus::Waiting, false, 0, 30),
+            "😪"
+        );
+        assert_eq!(
+            agent_face_emoji(&AgentStatus::Waiting, false, 1, 89),
+            "🥱"
+        );
+        // 90s+: deep sleep
+        assert_eq!(
+            agent_face_emoji(&AgentStatus::Waiting, false, 0, 90),
+            "🥱"
+        );
+        assert_eq!(
+            agent_face_emoji(&AgentStatus::Waiting, false, 1, 200),
+            "😵‍💫"
+        );
+    }
+
+    #[test]
+    fn test_agent_face_emoji_ended() {
+        assert_eq!(
+            agent_face_emoji(&AgentStatus::Ended, false, 0, 0),
+            "✅"
+        );
+        assert_eq!(
+            agent_face_emoji(&AgentStatus::Ended, true, 0, 0),
+            "❌"
+        );
+    }
+
+    #[test]
+    fn test_permission_warning_text() {
+        assert_eq!(permission_warning_text(0), "🟡 NEED USER INPUT ⚠️");
+        assert_eq!(permission_warning_text(29), "🟡 NEED USER INPUT ⚠️");
+        assert_eq!(permission_warning_text(30), "🟠 AWAITING YOUR RESPONSE ⚠️");
+        assert_eq!(permission_warning_text(59), "🟠 AWAITING YOUR RESPONSE ⚠️");
+        assert_eq!(permission_warning_text(60), "🔴 PLEASE INPUT ASAP ⚠️");
+        assert_eq!(permission_warning_text(300), "🔴 PLEASE INPUT ASAP ⚠️");
+    }
+
+    #[test]
+    fn test_idle_zzz_count() {
+        assert_eq!(idle_zzz_count(0), 1);
+        assert_eq!(idle_zzz_count(29), 1);
+        assert_eq!(idle_zzz_count(30), 2);
+        assert_eq!(idle_zzz_count(89), 2);
+        assert_eq!(idle_zzz_count(90), 3);
+        assert_eq!(idle_zzz_count(300), 3);
+    }
+
+    #[test]
+    fn test_duration_label() {
+        assert_eq!(duration_label(&AgentStatus::Running), "Running");
+        assert_eq!(duration_label(&AgentStatus::Permission), "Waited");
+        assert_eq!(duration_label(&AgentStatus::Waiting), "Idle");
+        assert_eq!(duration_label(&AgentStatus::Started), "");
+        assert_eq!(duration_label(&AgentStatus::Ended), "Done");
+    }
+}
