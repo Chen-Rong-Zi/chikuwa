@@ -454,110 +454,75 @@ fn render_agent_room(
         None
     };
 
-    let status_label = match agent.status() {
-        AgentStatus::Started => "starting",
-        AgentStatus::Running => "running",
-        AgentStatus::Waiting => "waiting",
-        AgentStatus::Permission => "needs input!",
-        AgentStatus::Ended => "ended",
-    };
-
-    let status_emoji = agent.event_emoji().unwrap_or(match agent.status() {
-        AgentStatus::Started => "🚀",
-        AgentStatus::Running => "🔧",
-        AgentStatus::Waiting => "💤",
-        AgentStatus::Permission => "🔐",
-        AgentStatus::Ended => "🏁",
-    });
-
     let border_style = if is_permission {
         Style::default().fg(theme::COLOR_WHITE)
     } else {
         Style::default().fg(theme::COLOR_PURPLE)
     };
 
+    let has_failure = agent.failure_detail().is_some();
+    let face = theme::agent_face_emoji(&agent.status(), has_failure, anim_frame);
+
+    // Event emoji for title bar right side
+    let right_emoji = if agent.status() == AgentStatus::Permission {
+        // Permission uses ✋/🙋 from face emoji, no separate event emoji
+        ""
+    } else if let Some(tool_name) = agent.current_tool_name() {
+        theme::tool_emoji(tool_name, anim_frame)
+    } else {
+        agent
+            .event_emoji()
+            .unwrap_or_else(|| theme::event_emoji(agent.event_label()))
+    };
+
     let mut lines = Vec::new();
 
-    // Room top border: ┌── 🤖 Agent Name ──── Status ──┐
-    let name_text = format!("🤖 {}", agent.event_label());
-    let status_text = format!("{} {}", status_emoji, status_label);
-    let name_width = name_text.width();
-    let status_width = status_text.width();
+    // Title bar: ┌── face ──── right_emoji ──┐
+    let face_width = face.width();
+    let right_width = right_emoji.width();
     let inner_width = content_width.saturating_sub(2); // ┌ and ┐
-    let fill_len = inner_width.saturating_sub(name_width + status_width + 4); // 2 spaces + 2 ──
+    let fill_len = inner_width.saturating_sub(face_width + right_width + 4); // 2 spaces + 2 ──
     let fill = "─".repeat(fill_len);
 
     let mut border_spans = vec![
         Span::styled("┌─ ".to_string(), border_style),
-        Span::styled(name_text, name_style),
+        Span::styled(face.to_string(), name_style),
         Span::styled(format!(" ── {} ", fill), border_style),
-        Span::styled(status_text, dim_style),
-        Span::styled(" ─┐".to_string(), border_style),
     ];
+    if !right_emoji.is_empty() {
+        border_spans.push(Span::styled(right_emoji.to_string(), dim_style));
+        border_spans.push(Span::styled(" ─┐".to_string(), border_style));
+    } else {
+        border_spans.push(Span::styled("──┐".to_string(), border_style));
+    }
     apply_bg(&mut border_spans, bg_color, is_selected);
     lines.push(Line::from(border_spans));
 
-    // Room content: activity description + tools
-    let icon = theme::status_icon(&agent.status(), anim_frame);
-
     // Empty line after title
-    let mut empty_spans = vec![Span::styled("│ ".to_string(), border_style)];
-    let pad = content_width.saturating_sub(3);
-    empty_spans.push(Span::styled(
-        " ".repeat(pad),
-        Style::default().fg(Color::Reset),
+    lines.push(make_empty_line(
+        content_width,
+        border_style,
+        bg_color,
+        is_selected,
     ));
-    empty_spans.push(Span::styled("│".to_string(), border_style));
-    apply_bg(&mut empty_spans, bg_color, is_selected);
-    lines.push(Line::from(empty_spans));
 
-    // Activity line
-    let act_icon = agent.event_emoji().unwrap_or(theme::ICON_TOOL);
-    let activity = if let Some(tool_name) = agent.current_tool_name() {
-        if let Some(detail) = agent.current_tool_detail() {
-            format!("{} {} {}", act_icon, tool_name, detail)
-        } else {
-            format!("{} {}", act_icon, tool_name)
-        }
-    } else if let Some(emoji) = agent.event_emoji() {
-        emoji.to_string()
-    } else {
-        "idle".to_string()
-    };
-
-    let mut activity_spans = vec![
-        Span::styled("│ ".to_string(), border_style),
-        Span::styled(
-            format!(" {} ", icon),
-            theme::status_style(&agent.status(), true),
-        ),
-        Span::styled(format!(" {}", activity), dim_style),
-    ];
-    let used: usize = activity_spans.iter().map(|s| s.content.width()).sum();
-    let pad = content_width.saturating_sub(used + 1); // +1 for │
-    activity_spans.push(Span::styled(
-        " ".repeat(pad),
-        Style::default().fg(Color::Reset),
-    ));
-    activity_spans.push(Span::styled("│".to_string(), border_style));
-    apply_bg(&mut activity_spans, bg_color, is_selected);
-    lines.push(Line::from(activity_spans));
-
-    // Tool lines (up to 3)
+    // Tool lines (up to 3, each with animated emoji + truncated detail)
     let active_tools = agent.active_tools();
-    let visible_tools: Vec<_> = if active_tools.len() > 3 {
-        active_tools[active_tools.len() - 3..].iter().collect()
-    } else {
-        active_tools.iter().collect()
-    };
-    for tool in &visible_tools {
-        let tool_text = match &tool.detail {
-            Some(detail) => format!("  {}: {}", tool.name, detail),
-            None => format!("  {}", tool.name),
-        };
+    let visible_count = active_tools.len().min(3);
+    let overflow = active_tools.len().saturating_sub(3);
+    // Show the most recent 3 tools
+    let start_idx = active_tools.len().saturating_sub(3);
+    for (i, tool) in active_tools[start_idx..start_idx + visible_count]
+        .iter()
+        .enumerate()
+    {
+        let emoji = theme::tool_emoji(&tool.name, anim_frame + i); // offset for visual variety
+        let detail = tool.detail.as_deref().unwrap_or("");
+        let tool_text = format!("{} {}", emoji, detail);
+        let tool_text = truncate_to_width(&tool_text, content_width.saturating_sub(4)); // │ + space + text + space + │
         let mut tool_spans = vec![
             Span::styled("│ ".to_string(), border_style),
-            Span::styled(format!(" 🔧{}", tool_text), dim_style),
+            Span::styled(format!(" {}", tool_text), dim_style),
         ];
         let used: usize = tool_spans.iter().map(|s| s.content.width()).sum();
         let pad = content_width.saturating_sub(used + 1);
@@ -569,27 +534,47 @@ fn render_agent_room(
         apply_bg(&mut tool_spans, bg_color, is_selected);
         lines.push(Line::from(tool_spans));
     }
+    if overflow > 0 {
+        let overflow_text = format!("  +{} more", overflow);
+        let mut overflow_spans = vec![
+            Span::styled("│ ".to_string(), border_style),
+            Span::styled(overflow_text, dim_style),
+        ];
+        let used: usize = overflow_spans.iter().map(|s| s.content.width()).sum();
+        let pad = content_width.saturating_sub(used + 1);
+        overflow_spans.push(Span::styled(
+            " ".repeat(pad),
+            Style::default().fg(Color::Reset),
+        ));
+        overflow_spans.push(Span::styled("│".to_string(), border_style));
+        apply_bg(&mut overflow_spans, bg_color, is_selected);
+        lines.push(Line::from(overflow_spans));
+    }
 
-    // Empty line after tools
-    let mut tool_end_spans = vec![Span::styled("│ ".to_string(), border_style)];
-    let pad2 = content_width.saturating_sub(3);
-    tool_end_spans.push(Span::styled(
-        " ".repeat(pad2),
-        Style::default().fg(Color::Reset),
-    ));
-    tool_end_spans.push(Span::styled("│".to_string(), border_style));
-    apply_bg(&mut tool_end_spans, bg_color, is_selected);
-    lines.push(Line::from(tool_end_spans));
+    // Permission notice
+    if agent.status() == AgentStatus::Permission {
+        let notice = "needs input! ⚠️";
+        let mut notice_spans = vec![
+            Span::styled("│ ".to_string(), border_style),
+            Span::styled(format!(" {}", notice), name_style),
+        ];
+        let used: usize = notice_spans.iter().map(|s| s.content.width()).sum();
+        let pad = content_width.saturating_sub(used + 1);
+        notice_spans.push(Span::styled(
+            " ".repeat(pad),
+            Style::default().fg(Color::Reset),
+        ));
+        notice_spans.push(Span::styled("│".to_string(), border_style));
+        apply_bg(&mut notice_spans, bg_color, is_selected);
+        lines.push(Line::from(notice_spans));
+    }
 
     // Failure detail line (red)
     if let Some(failure) = agent.failure_detail() {
         let failure_style = Style::default().fg(theme::COLOR_FAILURE);
         let mut failure_spans = vec![
             Span::styled("│ ".to_string(), border_style),
-            Span::styled(
-                format!(" {} {}", theme::ICON_FAILURE, failure),
-                failure_style,
-            ),
+            Span::styled(format!(" 💥 {}", failure), failure_style),
         ];
         let used: usize = failure_spans.iter().map(|s| s.content.width()).sum();
         let pad = content_width.saturating_sub(used + 1);
@@ -602,15 +587,17 @@ fn render_agent_room(
         lines.push(Line::from(failure_spans));
     }
 
-    // Duration + summary line
-    let duration = format_duration(agent.updated_at);
-    let tool_count = if active_tools.is_empty() {
-        String::new()
-    } else {
-        format!("  📋 {} tools", active_tools.len())
-    };
-    let info = format!("⏱️ {}{}", duration, tool_count);
+    // Empty line before duration
+    lines.push(make_empty_line(
+        content_width,
+        border_style,
+        bg_color,
+        is_selected,
+    ));
 
+    // Duration line
+    let duration = format_duration(agent.updated_at);
+    let info = format!("⏱️ {}", duration);
     let mut info_spans = vec![
         Span::styled("│ ".to_string(), border_style),
         Span::styled(format!(" {}", info), dim_style),
@@ -636,6 +623,49 @@ fn render_agent_room(
     lines.push(Line::from(bottom_spans));
 
     lines
+}
+
+/// Truncate a string to fit within max_width Unicode columns, appending "…" if truncated.
+fn truncate_to_width(text: &str, max_width: usize) -> String {
+    if max_width == 0 {
+        return String::new();
+    }
+    let total_width = text.width();
+    if total_width <= max_width {
+        return text.to_string();
+    }
+    // Leave room for "…"
+    let target = max_width.saturating_sub(1);
+    let mut width = 0;
+    let mut result = String::new();
+    for ch in text.chars() {
+        let ch_width = unicode_width::UnicodeWidthChar::width(ch).unwrap_or(0);
+        if width + ch_width > target {
+            break;
+        }
+        result.push(ch);
+        width += ch_width;
+    }
+    result.push('…');
+    result
+}
+
+/// Make an empty content line with borders: │   │
+fn make_empty_line(
+    content_width: usize,
+    border_style: Style,
+    bg_color: Option<Color>,
+    is_selected: bool,
+) -> Line<'static> {
+    let pad = content_width.saturating_sub(3);
+    let mut spans = vec![Span::styled("│ ".to_string(), border_style)];
+    spans.push(Span::styled(
+        " ".repeat(pad),
+        Style::default().fg(Color::Reset),
+    ));
+    spans.push(Span::styled("│".to_string(), border_style));
+    apply_bg(&mut spans, bg_color, is_selected);
+    Line::from(spans)
 }
 
 /// Apply background color (permission highlight or selection) to all spans in a line.

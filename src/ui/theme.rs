@@ -63,6 +63,85 @@ pub fn status_color(status: &AgentStatus, session_attached: bool) -> Color {
     }
 }
 
+/// Face emoji for agent status, animated only when working or needing attention.
+/// Running and Permission animate; all other states are static.
+pub fn agent_face_emoji(
+    status: &AgentStatus,
+    has_failure: bool,
+    anim_frame: usize,
+) -> &'static str {
+    match status {
+        AgentStatus::Started => "🟢",
+        AgentStatus::Running => {
+            let frames = ["🤔", "🧐"];
+            frames[anim_frame % frames.len()]
+        }
+        AgentStatus::Permission => {
+            let frames = ["🥺✋", "😫🙋", "🥺✋", "😫🙋"];
+            frames[anim_frame % frames.len()]
+        }
+        AgentStatus::Waiting => "😴",
+        AgentStatus::Ended => {
+            if has_failure {
+                "❌"
+            } else {
+                "✅"
+            }
+        }
+    }
+}
+
+/// Tool emoji with 2-frame animation per tool type.
+pub fn tool_emoji(tool_name: &str, anim_frame: usize) -> &'static str {
+    let (a, b) = match tool_name {
+        "Bash" | "bash" => ("💻", "⌨️"),
+        "Read" | "read" => ("📖", "👀"),
+        "Write" | "write" => ("📝", "✍️"),
+        "Edit" | "edit" => ("✏️", "🖊️"),
+        "NotebookEdit" | "notebook_edit" => ("📓", "✍️"),
+        "Grep" | "grep" => ("🔍", "🕵️"),
+        "Glob" | "glob" => ("📂", "🗂️"),
+        "WebFetch" | "web_fetch" => ("🌐", "⬇️"),
+        "WebSearch" | "web_search" => ("🕵️", "🌐"),
+        "Task" | "Agent" | "task" | "agent" => ("👶", "🥚"),
+        "AskUserQuestion" => ("❓", "🤷"),
+        "ExitPlanMode" => ("📋", "✅"),
+        "file_edited" => ("✏️", "🖊️"),
+        _ => {
+            // MCP tools start with "mcp__"
+            if tool_name.starts_with("mcp__") {
+                ("⚙️", "🔧")
+            } else {
+                ("🔧", "⚙️")
+            }
+        }
+    };
+    if anim_frame.is_multiple_of(2) {
+        a
+    } else {
+        b
+    }
+}
+
+/// Static emoji for hook event names, used in title bar right side.
+pub fn event_emoji(hook_event_name: &str) -> &'static str {
+    match hook_event_name {
+        "PreToolUse" => "🪝",
+        "PostToolUse" => "🟩",
+        "PostToolUseFailure" => "🟥",
+        "UserPromptSubmit" | "UserPromptExpansion" => "✍️",
+        "SubagentStart" => "👶",
+        "SubagentStop" => "🔀",
+        "Stop" => "✅",
+        "StopFailure" => "❌",
+        "PermissionRequest" | "PermissionDenied" => "🔐",
+        "PreCompact" | "PostCompact" => "🗜️",
+        "SessionStart" => "🟢",
+        "SessionEnd" => "🏁",
+        _ => "🔧",
+    }
+}
+
 pub fn status_style(status: &AgentStatus, session_attached: bool) -> Style {
     Style::default().fg(status_color(status, session_attached))
 }
