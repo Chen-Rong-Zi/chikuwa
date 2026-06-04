@@ -9,6 +9,7 @@ import { appendFileSync, mkdirSync, readdirSync } from "fs";
 import { join } from "path";
 
 const LOG_FILE = "/tmp/chikuwa-opencode-plugin.log";
+const RAW_LOG_FILE = "/tmp/chikuwa.raw.log";
 const CHIKUWA_STATE_DIR = process.env.XDG_RUNTIME_DIR
 	? join(process.env.XDG_RUNTIME_DIR, "chikuwa")
 	: "/tmp/chikuwa";
@@ -19,6 +20,14 @@ const log = (msg: string, data?: unknown) => {
 	const logMsg = `[${timestamp}] ${msg}${data ? " " + JSON.stringify(data) : ""}\n`;
 	try {
 		appendFileSync(LOG_FILE, logMsg);
+	} catch {
+		// ignore
+	}
+};
+
+const logRaw = (data: unknown) => {
+	try {
+		appendFileSync(RAW_LOG_FILE, JSON.stringify(data) + "\n", "utf8");
 	} catch {
 		// ignore
 	}
@@ -139,6 +148,7 @@ export const ChikuwaPlugin = async ({ client, directory, $ }: { client: any; dir
 		"tool.execute.before": async (input: { tool: string; sessionID?: string }, output: { args: Record<string, unknown> }) => {
 			const toolName = input.tool;
 			const toolDetail = extractToolDetail(toolName, output.args);
+			logRaw({ type: "tool.execute.before", tool: toolName, args: output.args, sessionID: input.sessionID });
 			log("Tool executing", { tool: toolName, detail: toolDetail });
 
 			if (input.sessionID) updateSession(input.sessionID);
@@ -168,6 +178,7 @@ export const ChikuwaPlugin = async ({ client, directory, $ }: { client: any; dir
 			const eventType = event.type;
 			const props = event.properties || {};
 
+			logRaw(event);
 			log("Event received", { type: eventType });
 
 			// Extract session ID from various event formats
