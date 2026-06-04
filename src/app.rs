@@ -3,7 +3,7 @@ use std::io;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use anyhow::Result;
 use crossterm::event::{
@@ -177,6 +177,8 @@ pub struct App {
     /// When the next usage fetch is scheduled.
     usage_next_fetch: Option<std::time::Instant>,
     view_mode: ViewMode,
+    /// Last time Tick event triggered a tmux refresh (throttled to ~2s).
+    last_tick_refresh: Instant,
 }
 
 impl App {
@@ -207,6 +209,7 @@ impl App {
             usage: persist::load_usage().map(Ok),
             usage_next_fetch: None,
             view_mode: ViewMode::Tree,
+            last_tick_refresh: Instant::now() - Duration::from_secs(3),
         }
     }
 
@@ -769,7 +772,7 @@ async fn run_app(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Resul
         // Use catch_unwind to handle potential panics in crossterm event parsing
         // (e.g., integer overflow in parse_csi_sgr_mouse with malformed sequences)
         let poll_result =
-            std::panic::catch_unwind(|| crossterm::event::poll(Duration::from_secs(2)));
+            std::panic::catch_unwind(|| crossterm::event::poll(Duration::from_millis(100)));
 
         match poll_result {
             Ok(Ok(true)) => {
@@ -1181,7 +1184,10 @@ async fn run_app(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Resul
                     }
                 }
                 AppEvent::Tick => {
-                    app.refresh().await?;
+                    if app.last_tick_refresh.elapsed() >= Duration::from_secs(2) {
+                        app.refresh().await?;
+                        app.last_tick_refresh = Instant::now();
+                    }
                 }
                 AppEvent::TmuxChanged => {
                     app.user_navigated = false;
