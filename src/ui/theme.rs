@@ -189,26 +189,14 @@ mod tests {
 
     #[test]
     fn test_agent_face_emoji_started_static() {
-        assert_eq!(
-            agent_face_emoji(&AgentStatus::Started, false, 0, 0),
-            "🟢"
-        );
-        assert_eq!(
-            agent_face_emoji(&AgentStatus::Started, false, 1, 100),
-            "🟢"
-        );
+        assert_eq!(agent_face_emoji(&AgentStatus::Started, false, 0, 0), "🟢");
+        assert_eq!(agent_face_emoji(&AgentStatus::Started, false, 1, 100), "🟢");
     }
 
     #[test]
     fn test_agent_face_emoji_running_animated() {
-        assert_eq!(
-            agent_face_emoji(&AgentStatus::Running, false, 0, 0),
-            "⚙️"
-        );
-        assert_eq!(
-            agent_face_emoji(&AgentStatus::Running, false, 1, 0),
-            "🔧"
-        );
+        assert_eq!(agent_face_emoji(&AgentStatus::Running, false, 0, 0), "⚙️");
+        assert_eq!(agent_face_emoji(&AgentStatus::Running, false, 1, 0), "🔧");
     }
 
     #[test]
@@ -245,44 +233,20 @@ mod tests {
     #[test]
     fn test_agent_face_emoji_waiting_escalation() {
         // 0-30s: light drowsiness
-        assert_eq!(
-            agent_face_emoji(&AgentStatus::Waiting, false, 0, 0),
-            "😴"
-        );
-        assert_eq!(
-            agent_face_emoji(&AgentStatus::Waiting, false, 1, 29),
-            "😪"
-        );
+        assert_eq!(agent_face_emoji(&AgentStatus::Waiting, false, 0, 0), "😴");
+        assert_eq!(agent_face_emoji(&AgentStatus::Waiting, false, 1, 29), "😪");
         // 30-90s: yawning
-        assert_eq!(
-            agent_face_emoji(&AgentStatus::Waiting, false, 0, 30),
-            "😪"
-        );
-        assert_eq!(
-            agent_face_emoji(&AgentStatus::Waiting, false, 1, 89),
-            "🥱"
-        );
+        assert_eq!(agent_face_emoji(&AgentStatus::Waiting, false, 0, 30), "😪");
+        assert_eq!(agent_face_emoji(&AgentStatus::Waiting, false, 1, 89), "🥱");
         // 90s+: deep sleep
-        assert_eq!(
-            agent_face_emoji(&AgentStatus::Waiting, false, 0, 90),
-            "🥱"
-        );
-        assert_eq!(
-            agent_face_emoji(&AgentStatus::Waiting, false, 1, 200),
-            "😵‍💫"
-        );
+        assert_eq!(agent_face_emoji(&AgentStatus::Waiting, false, 0, 90), "🥱");
+        assert_eq!(agent_face_emoji(&AgentStatus::Waiting, false, 1, 200), "😵‍💫");
     }
 
     #[test]
     fn test_agent_face_emoji_ended() {
-        assert_eq!(
-            agent_face_emoji(&AgentStatus::Ended, false, 0, 0),
-            "✅"
-        );
-        assert_eq!(
-            agent_face_emoji(&AgentStatus::Ended, true, 0, 0),
-            "❌"
-        );
+        assert_eq!(agent_face_emoji(&AgentStatus::Ended, false, 0, 0), "✅");
+        assert_eq!(agent_face_emoji(&AgentStatus::Ended, true, 0, 0), "❌");
     }
 
     #[test]

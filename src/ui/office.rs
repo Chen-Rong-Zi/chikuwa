@@ -338,7 +338,12 @@ fn render_agent_room(
     lines.push(Line::from(border_spans));
 
     // Empty line after title
-    lines.push(make_empty_line(content_width, border_style, bg_color, is_selected));
+    lines.push(make_empty_line(
+        content_width,
+        border_style,
+        bg_color,
+        is_selected,
+    ));
 
     // Tool lines (all with ◐ spinner)
     let active_tools = agent.active_tools();
@@ -353,7 +358,10 @@ fn render_agent_room(
         ];
         let used: usize = tool_spans.iter().map(|s| s.content.width()).sum();
         let pad = content_width.saturating_sub(used + 1);
-        tool_spans.push(Span::styled(" ".repeat(pad), Style::default().fg(Color::Reset)));
+        tool_spans.push(Span::styled(
+            " ".repeat(pad),
+            Style::default().fg(Color::Reset),
+        ));
         tool_spans.push(Span::styled("│".to_string(), border_style));
         apply_bg(&mut tool_spans, bg_color, is_selected);
         lines.push(Line::from(tool_spans));
@@ -361,7 +369,12 @@ fn render_agent_room(
 
     // Empty line before subagents (if any subagents or completed count)
     if !subagents.is_empty() || completed_count > 0 {
-        lines.push(make_empty_line(content_width, border_style, bg_color, is_selected));
+        lines.push(make_empty_line(
+            content_width,
+            border_style,
+            bg_color,
+            is_selected,
+        ));
     }
 
     // Subagent lines
@@ -385,7 +398,10 @@ fn render_agent_room(
             ];
             let used: usize = spans.iter().map(|s| s.content.width()).sum();
             let pad = content_width.saturating_sub(used + 1);
-            spans.push(Span::styled(" ".repeat(pad), Style::default().fg(Color::Reset)));
+            spans.push(Span::styled(
+                " ".repeat(pad),
+                Style::default().fg(Color::Reset),
+            ));
             spans.push(Span::styled("│".to_string(), border_style));
             apply_bg(&mut spans, bg_color, is_selected);
             lines.push(Line::from(spans));
@@ -407,7 +423,10 @@ fn render_agent_room(
             // Right-align duration
             let used: usize = spans.iter().map(|s| s.content.width()).sum();
             let pad = content_width.saturating_sub(used + dur_text.width() + 1);
-            spans.push(Span::styled(" ".repeat(pad), Style::default().fg(Color::Reset)));
+            spans.push(Span::styled(
+                " ".repeat(pad),
+                Style::default().fg(Color::Reset),
+            ));
             spans.push(Span::styled(dur_text, dim_style));
             spans.push(Span::styled("│".to_string(), border_style));
             apply_bg(&mut spans, bg_color, is_selected);
@@ -425,7 +444,10 @@ fn render_agent_room(
                 ];
                 let used: usize = spans.iter().map(|s| s.content.width()).sum();
                 let pad = content_width.saturating_sub(used + 1);
-                spans.push(Span::styled(" ".repeat(pad), Style::default().fg(Color::Reset)));
+                spans.push(Span::styled(
+                    " ".repeat(pad),
+                    Style::default().fg(Color::Reset),
+                ));
                 spans.push(Span::styled("│".to_string(), border_style));
                 apply_bg(&mut spans, bg_color, is_selected);
                 lines.push(Line::from(spans));
@@ -442,7 +464,10 @@ fn render_agent_room(
         ];
         let used: usize = spans.iter().map(|s| s.content.width()).sum();
         let pad = content_width.saturating_sub(used + 1);
-        spans.push(Span::styled(" ".repeat(pad), Style::default().fg(Color::Reset)));
+        spans.push(Span::styled(
+            " ".repeat(pad),
+            Style::default().fg(Color::Reset),
+        ));
         spans.push(Span::styled("│".to_string(), border_style));
         apply_bg(&mut spans, bg_color, is_selected);
         lines.push(Line::from(spans));
@@ -457,7 +482,10 @@ fn render_agent_room(
         ];
         let used: usize = spans.iter().map(|s| s.content.width()).sum();
         let pad = content_width.saturating_sub(used + 1);
-        spans.push(Span::styled(" ".repeat(pad), Style::default().fg(Color::Reset)));
+        spans.push(Span::styled(
+            " ".repeat(pad),
+            Style::default().fg(Color::Reset),
+        ));
         spans.push(Span::styled("│".to_string(), border_style));
         apply_bg(&mut spans, bg_color, is_selected);
         lines.push(Line::from(spans));
@@ -472,14 +500,22 @@ fn render_agent_room(
         ];
         let used: usize = spans.iter().map(|s| s.content.width()).sum();
         let pad = content_width.saturating_sub(used + 1);
-        spans.push(Span::styled(" ".repeat(pad), Style::default().fg(Color::Reset)));
+        spans.push(Span::styled(
+            " ".repeat(pad),
+            Style::default().fg(Color::Reset),
+        ));
         spans.push(Span::styled("│".to_string(), border_style));
         apply_bg(&mut spans, bg_color, is_selected);
         lines.push(Line::from(spans));
     }
 
     // Empty line before duration
-    lines.push(make_empty_line(content_width, border_style, bg_color, is_selected));
+    lines.push(make_empty_line(
+        content_width,
+        border_style,
+        bg_color,
+        is_selected,
+    ));
 
     // Duration line with contextual label
     let label = theme::duration_label(&agent.status());
@@ -495,7 +531,10 @@ fn render_agent_room(
     ];
     let used: usize = info_spans.iter().map(|s| s.content.width()).sum();
     let pad = content_width.saturating_sub(used + 1);
-    info_spans.push(Span::styled(" ".repeat(pad), Style::default().fg(Color::Reset)));
+    info_spans.push(Span::styled(
+        " ".repeat(pad),
+        Style::default().fg(Color::Reset),
+    ));
     info_spans.push(Span::styled("│".to_string(), border_style));
     apply_bg(&mut info_spans, bg_color, is_selected);
     lines.push(Line::from(info_spans));
