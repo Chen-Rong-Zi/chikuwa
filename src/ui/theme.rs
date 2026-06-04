@@ -65,22 +65,39 @@ pub fn status_color(status: &AgentStatus, session_attached: bool) -> Color {
 
 /// Face emoji for agent status, animated only when working or needing attention.
 /// Running and Permission animate; all other states are static.
+/// Time-escalated: Permission and Waiting frames intensify with elapsed time.
 pub fn agent_face_emoji(
     status: &AgentStatus,
     has_failure: bool,
     anim_frame: usize,
+    elapsed_secs: u64,
 ) -> &'static str {
     match status {
         AgentStatus::Started => "🟢",
         AgentStatus::Running => {
-            let frames = ["🤔", "🧐"];
+            let frames = ["⚙️", "🔧"];
             frames[anim_frame % frames.len()]
         }
         AgentStatus::Permission => {
-            let frames = ["🥺✋", "😫🙋", "🥺✋", "😫🙋"];
+            let frames = if elapsed_secs < 30 {
+                ["🥺✋", "🙁🤚"]
+            } else if elapsed_secs < 60 {
+                ["😯🙋", "😫🙋"]
+            } else {
+                ["😫🙋", "😫🙋‍♂️"]
+            };
             frames[anim_frame % frames.len()]
         }
-        AgentStatus::Waiting => "😴",
+        AgentStatus::Waiting => {
+            let frames = if elapsed_secs < 30 {
+                ["😴", "😪"]
+            } else if elapsed_secs < 90 {
+                ["😪", "🥱"]
+            } else {
+                ["🥱", "😵‍💫"]
+            };
+            frames[anim_frame % frames.len()]
+        }
         AgentStatus::Ended => {
             if has_failure {
                 "❌"
@@ -91,36 +108,43 @@ pub fn agent_face_emoji(
     }
 }
 
-/// Tool emoji with 2-frame animation per tool type.
-pub fn tool_emoji(tool_name: &str, anim_frame: usize) -> &'static str {
-    let (a, b) = match tool_name {
-        "Bash" | "bash" => ("💻", "⌨️"),
-        "Read" | "read" => ("📖", "👀"),
-        "Write" | "write" => ("📝", "✍️"),
-        "Edit" | "edit" => ("✏️", "🖊️"),
-        "NotebookEdit" | "notebook_edit" => ("📓", "✍️"),
-        "Grep" | "grep" => ("🔍", "🕵️"),
-        "Glob" | "glob" => ("📂", "🗂️"),
-        "WebFetch" | "web_fetch" => ("🌐", "⬇️"),
-        "WebSearch" | "web_search" => ("🕵️", "🌐"),
-        "Task" | "Agent" | "task" | "agent" => ("👶", "🥚"),
-        "AskUserQuestion" => ("❓", "🤷"),
-        "ExitPlanMode" => ("📋", "✅"),
-        "file_edited" => ("✏️", "🖊️"),
-        _ => {
-            // MCP tools start with "mcp__"
-            if tool_name.starts_with("mcp__") {
-                ("⚙️", "🔧")
-            } else {
-                ("🔧", "⚙️")
-            }
-        }
-    };
-    if anim_frame.is_multiple_of(2) {
-        a
+/// Permission warning text, escalating with wait time.
+pub fn permission_warning_text(elapsed_secs: u64) -> &'static str {
+    if elapsed_secs < 30 {
+        "🟡 NEED USER INPUT ⚠️"
+    } else if elapsed_secs < 60 {
+        "🟠 AWAITING YOUR RESPONSE ⚠️"
     } else {
-        b
+        "🔴 PLEASE INPUT ASAP ⚠️"
     }
+}
+
+/// Number of 💤 emojis for idle state, based on elapsed time.
+pub fn idle_zzz_count(elapsed_secs: u64) -> usize {
+    if elapsed_secs < 30 {
+        1
+    } else if elapsed_secs < 90 {
+        2
+    } else {
+        3
+    }
+}
+
+/// Duration label prefix based on agent status.
+pub fn duration_label(status: &AgentStatus) -> &'static str {
+    match status {
+        AgentStatus::Running => "Running",
+        AgentStatus::Permission => "Waited",
+        AgentStatus::Waiting => "Idle",
+        AgentStatus::Started => "",
+        AgentStatus::Ended => "Done",
+    }
+}
+
+pub const TOOL_SPINNER_FRAMES: &[&str] = &["◐", "◓", "◑", "◒"];
+
+pub fn tool_spinner(anim_frame: usize) -> &'static str {
+    TOOL_SPINNER_FRAMES[anim_frame % TOOL_SPINNER_FRAMES.len()]
 }
 
 /// Static emoji for hook event names, used in title bar right side.
