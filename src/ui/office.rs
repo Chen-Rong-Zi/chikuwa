@@ -62,13 +62,8 @@ fn elapsed_secs(updated_at: u64) -> u64 {
     now.saturating_sub(updated_at)
 }
 
-/// Format elapsed seconds as human-readable string.
-fn format_duration(secs: u64) -> String {
-    let now = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_secs();
-    let elapsed = now.saturating_sub(secs);
+/// Format an elapsed duration as human-readable string.
+fn format_elapsed(elapsed: u64) -> String {
     if elapsed < 60 {
         format!("{}s", elapsed)
     } else if elapsed < 3600 {
@@ -76,6 +71,11 @@ fn format_duration(secs: u64) -> String {
     } else {
         format!("{}h {}m", elapsed / 3600, (elapsed % 3600) / 60)
     }
+}
+
+/// Format elapsed seconds since a Unix timestamp as human-readable string.
+fn format_duration(updated_at: u64) -> String {
+    format_elapsed(elapsed_secs(updated_at))
 }
 
 /// Render the office view.
@@ -125,7 +125,7 @@ pub fn selected_line_range(
     let total = lines.len();
 
     // Find the selected entry's visual block.
-    // Main rooms start with ┌─  (unique marker). Subagent cards use ┌─── (no space after ┌).
+    // Main rooms start with ┌─  (unique marker).
     // We scan for ┌─  to find main room starts, and track which entry index we're on.
     // The block ends at the next ┌─ , a ··· separator, or end of lines.
     let mut entry_idx = 0;
@@ -517,9 +517,9 @@ fn render_agent_room(
         is_selected,
     ));
 
-    // Duration line with contextual label
+    // Duration line with contextual label (reuse elapsed for consistency)
     let label = theme::duration_label(&agent.status());
-    let duration = format_duration(agent.updated_at);
+    let duration = format_elapsed(elapsed);
     let info = if label.is_empty() {
         format!("⏱️ {}", duration)
     } else {
