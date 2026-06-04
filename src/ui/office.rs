@@ -53,6 +53,15 @@ fn collect_agent_entries(
     entries
 }
 
+/// Compute elapsed seconds since a Unix timestamp.
+fn elapsed_secs(updated_at: u64) -> u64 {
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
+    now.saturating_sub(updated_at)
+}
+
 /// Format elapsed seconds as human-readable string.
 fn format_duration(secs: u64) -> String {
     let now = std::time::SystemTime::now()
@@ -461,14 +470,15 @@ fn render_agent_room(
     };
 
     let has_failure = agent.failure_detail().is_some();
-    let face = theme::agent_face_emoji(&agent.status(), has_failure, anim_frame);
+    let elapsed = elapsed_secs(agent.updated_at);
+    let face = theme::agent_face_emoji(&agent.status(), has_failure, anim_frame, elapsed);
 
     // Event emoji for title bar right side
     let right_emoji = if agent.status() == AgentStatus::Permission {
         // Permission uses ✋/🙋 from face emoji, no separate event emoji
         ""
     } else if let Some(tool_name) = agent.current_tool_name() {
-        theme::tool_emoji(tool_name, anim_frame)
+        theme::tool_spinner(anim_frame)
     } else {
         agent
             .event_emoji()
@@ -516,7 +526,7 @@ fn render_agent_room(
         .iter()
         .enumerate()
     {
-        let emoji = theme::tool_emoji(&tool.name, anim_frame + i); // offset for visual variety
+        let emoji = theme::tool_spinner(anim_frame + i);
         let detail = tool.detail.as_deref().unwrap_or("");
         let tool_text = format!("{} {}", emoji, detail);
         let tool_text = truncate_to_width(&tool_text, content_width.saturating_sub(4)); // │ + space + text + space + │
