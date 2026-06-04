@@ -345,13 +345,11 @@ fn render_agent_room(
         is_selected,
     ));
 
-    // Tool lines (all with ◐ spinner)
+    // Tool lines (detail only, no spinner)
     let active_tools = agent.active_tools();
-    for (i, tool) in active_tools.iter().enumerate() {
-        let spinner = theme::tool_spinner(anim_frame + i);
+    for tool in active_tools.iter() {
         let detail = tool.detail.as_deref().unwrap_or("");
-        let tool_text = format!("{} {}", spinner, detail);
-        let tool_text = truncate_to_width(&tool_text, content_width.saturating_sub(4));
+        let tool_text = truncate_to_width(detail, content_width.saturating_sub(4));
         let mut tool_spans = vec![
             Span::styled("│ ".to_string(), border_style),
             Span::styled(format!(" {}", tool_text), dim_style),
@@ -406,11 +404,10 @@ fn render_agent_room(
             apply_bg(&mut spans, bg_color, is_selected);
             lines.push(Line::from(spans));
         } else {
-            // First tool: │ 👶 face spinner detail  duration │
+            // First tool: │ 👶 face detail  duration │
             let first_tool = &sub.tools[0];
-            let spinner = theme::tool_spinner(anim_frame + si);
             let detail = first_tool.detail.as_deref().unwrap_or("");
-            let text = format!("👶 {} {} {}", sub_face, spinner, detail);
+            let text = format!("👶 {} {}", sub_face, detail);
             let dur_text = format!("  {}", duration);
             let max_detail_width = content_width
                 .saturating_sub(4)
@@ -432,11 +429,10 @@ fn render_agent_room(
             apply_bg(&mut spans, bg_color, is_selected);
             lines.push(Line::from(spans));
 
-            // Subsequent tools: │    spinner detail │
-            for (ti, tool) in sub.tools[1..].iter().enumerate() {
-                let spinner = theme::tool_spinner(anim_frame + si + ti + 1);
+            // Subsequent tools: │    detail │
+            for tool in sub.tools[1..].iter() {
                 let detail = tool.detail.as_deref().unwrap_or("");
-                let text = format!("   {} {}", spinner, detail);
+                let text = format!("   {}", detail);
                 let text = truncate_to_width(&text, content_width.saturating_sub(4));
                 let mut spans = vec![
                     Span::styled("│".to_string(), border_style),
