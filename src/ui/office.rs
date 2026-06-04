@@ -115,32 +115,42 @@ pub fn selected_line_range(
     let lines = build_office_lines(&entries, width, selected, anim_frame);
     let total = lines.len();
 
-    // Find the line range for the selected entry by scanning for its room borders.
-    // Each room starts with ┌ and ends with ┘. We track which entry index we're on.
+    // Find the selected entry's visual block.
+    // Main rooms start with ┌─  (unique marker). Subagent cards use ┌─── (no space after ┌).
+    // We scan for ┌─  to find main room starts, and track which entry index we're on.
+    // The block ends at the next ┌─ , a ··· separator, or end of lines.
     let mut entry_idx = 0;
-    let mut room_start = 0;
-    let mut room_end = 0;
+    let mut block_start = 0;
+    let mut block_end = 0;
     let mut found = false;
 
     for (line_idx, line) in lines.iter().enumerate() {
         let text: String = line.spans.iter().map(|s| s.content.as_ref()).collect();
-        if text.contains('┌') {
-            room_start = line_idx;
+        if text.contains("┌─ ") {
             if entry_idx == selected {
+                block_start = line_idx;
                 found = true;
-            }
-        }
-        if text.contains('┘') {
-            if found {
-                room_end = line_idx;
+            } else if found {
+                // Hit the next entry's main room
+                block_end = line_idx - 1;
                 break;
             }
-            entry_idx += 1;
+            if !found {
+                entry_idx += 1;
+            }
+        } else if text.trim().starts_with("···") && found {
+            // Separator between entries
+            block_end = line_idx;
+            break;
         }
     }
 
+    if found && block_end == 0 {
+        block_end = total - 1;
+    }
+
     if found {
-        (room_start, room_end, total)
+        (block_start, block_end, total)
     } else {
         (0, 0, total)
     }
@@ -174,6 +184,15 @@ fn build_office_lines(
 
     let content_width = (width as usize).saturating_sub(2); // padding
 
+    // Title header
+    lines.push(Line::from(Span::styled(
+        "  🏢 Agent Office",
+        Style::default()
+            .fg(theme::COLOR_WHITE)
+            .add_modifier(Modifier::BOLD),
+    )));
+    lines.push(Line::from(""));
+
     for (idx, entry) in entries.iter().enumerate() {
         let is_selected = idx == selected;
         let is_permission = entry.agent_state.state == AgentStatus::Permission;
@@ -181,14 +200,19 @@ fn build_office_lines(
         // Main agent room
         let room_lines = render_agent_room(
             &entry.agent_state,
-            &entry.subagents,
-            entry.completed_count,
             content_width,
             is_selected,
             is_permission,
             anim_frame,
         );
         lines.extend(room_lines);
+
+        // Subagent cards below the main room
+        if !entry.subagents.is_empty() {
+            lines.push(Line::from(""));
+            let card_lines = render_subagent_cards(&entry.subagents, content_width, anim_frame);
+            lines.extend(card_lines);
+        }
 
         // Separator between entries
         if idx < entries.len() - 1 {
@@ -237,10 +261,179 @@ fn build_office_lines(
     lines
 }
 
+fn render_subagent_cards(
+    subagents: &[SubagentInfo],
+    content_width: usize,
+    _anim_frame: usize,
+) -> Vec<Line<'static>> {
+    if subagents.is_empty() {
+        return Vec::new();
+    }
+
+    let dim_style = Style::default().fg(theme::COLOR_DIM);
+    let border_style = Style::default().fg(theme::COLOR_PURPLE);
+    let white_border = Style::default().fg(theme::COLOR_WHITE);
+    let permission_style = Style::default()
+        .fg(theme::COLOR_LIGHT_PURPLE)
+        .bg(theme::COLOR_PERMISSION_BG);
+
+    struct CardLayout {
+        name: String,
+        status: String,
+        activity: String,
+        info: String,
+        inner_width: usize,
+        is_permission: bool,
+    }
+
+    let cards: Vec<CardLayout> = subagents
+        .iter()
+        .map(|sub| {
+            let name = format!("🤖 {}", sub.short_id);
+            let is_permission = matches!(sub.state, SubagentStatus::Waiting);
+
+            let (status_emoji, status_label) = match sub.state {
+                SubagentStatus::Running => ("🔧", "Running"),
+                SubagentStatus::Waiting => ("💤", "Waiting"),
+                SubagentStatus::Ended => ("✅", "Done"),
+            };
+            let status = format!("{} {}", status_emoji, status_label);
+
+            let duration = format_duration(sub.updated_at);
+            let tool_count = sub.tools.len();
+
+            let (activity, info) = match sub.state {
+                SubagentStatus::Running => {
+                    let act = sub
+                        .tools
+                        .first()
+                        .map(|t| match &t.detail {
+                            Some(d) => format!("{} {}", t.name, d),
+                            None => t.name.clone(),
+                        })
+                        .unwrap_or_default();
+                    let inf = format!("⏱️ {}", duration);
+                    (act, inf)
+                }
+                SubagentStatus::Waiting => {
+                    ("🔐 Permission".to_string(), "⚠️ Needs you!".to_string())
+                }
+                SubagentStatus::Ended => {
+                    let act = format!("{} ago", duration);
+                    let inf = if tool_count > 0 {
+                        format!("📋 {} tools", tool_count)
+                    } else {
+                        format!("⏱️ {}", duration)
+                    };
+                    (act, inf)
+                }
+            };
+
+            let max_content_width = [
+                name.as_str(),
+                status.as_str(),
+                activity.as_str(),
+                info.as_str(),
+            ]
+            .iter()
+            .map(|s| s.width())
+            .max()
+            .unwrap_or(0)
+            .max(12);
+            let inner_width = (max_content_width + 2).min(30);
+
+            CardLayout {
+                name,
+                status,
+                activity,
+                info,
+                inner_width,
+                is_permission,
+            }
+        })
+        .collect();
+
+    if cards.is_empty() {
+        return Vec::new();
+    }
+
+    let mut result = Vec::new();
+    let mut idx = 0;
+
+    while idx < cards.len() {
+        let mut row_cards = vec![idx];
+        let mut used = cards[idx].inner_width + 2;
+        let mut j = idx + 1;
+        while j < cards.len() {
+            let card_total = cards[j].inner_width + 2;
+            if used + 1 + card_total <= content_width {
+                used += 1 + card_total;
+                row_cards.push(j);
+                j += 1;
+            } else {
+                break;
+            }
+        }
+
+        for line_kind in 0..6 {
+            let mut spans: Vec<Span<'static>> = Vec::new();
+            for (ri, &ci) in row_cards.iter().enumerate() {
+                if ri > 0 {
+                    spans.push(Span::raw(" "));
+                }
+                let card = &cards[ci];
+                let bstyle = if card.is_permission {
+                    white_border
+                } else {
+                    border_style
+                };
+
+                match line_kind {
+                    0 => {
+                        spans.push(Span::styled("┌", bstyle));
+                        spans.push(Span::styled("─".repeat(card.inner_width), bstyle));
+                        spans.push(Span::styled("┐", bstyle));
+                    }
+                    5 => {
+                        spans.push(Span::styled("└", bstyle));
+                        spans.push(Span::styled("─".repeat(card.inner_width), bstyle));
+                        spans.push(Span::styled("┘", bstyle));
+                    }
+                    n @ 1..=4 => {
+                        let content = match (n - 1) as usize {
+                            0 => &card.name,
+                            1 => &card.status,
+                            2 => &card.activity,
+                            3 => &card.info,
+                            _ => unreachable!(),
+                        };
+                        let text = format!(
+                            "{}{:<width$}{}",
+                            "│",
+                            content,
+                            "│",
+                            width = card.inner_width
+                        );
+                        if card.is_permission {
+                            spans.push(Span::styled(text, permission_style));
+                        } else {
+                            spans.push(Span::styled(text, dim_style));
+                        }
+                    }
+                    _ => unreachable!(),
+                }
+            }
+            result.push(Line::from(spans));
+        }
+
+        idx = j;
+    }
+
+    result
+}
+
 fn render_agent_room(
     agent: &AgentState,
-    subagents: &[SubagentInfo],
-    completed_count: u32,
     content_width: usize,
     is_selected: bool,
     is_permission: bool,
@@ -307,12 +500,24 @@ fn render_agent_room(
     // Room content: activity description + tools
     let icon = theme::status_icon(&agent.state, anim_frame);
 
+    // Empty line after title
+    let mut empty_spans = vec![Span::styled("│ ".to_string(), border_style)];
+    let pad = content_width.saturating_sub(3);
+    empty_spans.push(Span::styled(
+        " ".repeat(pad),
+        Style::default().fg(Color::Reset),
+    ));
+    empty_spans.push(Span::styled("│".to_string(), border_style));
+    apply_bg(&mut empty_spans, bg_color, is_selected);
+    lines.push(Line::from(empty_spans));
+
     // Activity line
+    let act_icon = agent.event_emoji.as_deref().unwrap_or(theme::ICON_TOOL);
     let activity = if let Some(ref tool_name) = agent.tool_name {
         if let Some(ref detail) = agent.tool_detail {
-            format!("{} {}: {}", theme::ICON_TOOL, tool_name, detail)
+            format!("{} {} {}", act_icon, tool_name, detail)
         } else {
-            format!("{} {}", theme::ICON_TOOL, tool_name)
+            format!("{} {}", act_icon, tool_name)
         }
     } else if let Some(ref emoji) = agent.event_emoji {
         emoji.to_string()
@@ -364,6 +569,17 @@ fn render_agent_room(
         lines.push(Line::from(tool_spans));
     }
 
+    // Empty line after tools
+    let mut tool_end_spans = vec![Span::styled("│ ".to_string(), border_style)];
+    let pad2 = content_width.saturating_sub(3);
+    tool_end_spans.push(Span::styled(
+        " ".repeat(pad2),
+        Style::default().fg(Color::Reset),
+    ));
+    tool_end_spans.push(Span::styled("│".to_string(), border_style));
+    apply_bg(&mut tool_end_spans, bg_color, is_selected);
+    lines.push(Line::from(tool_end_spans));
+
     // Failure detail line (red)
     if let Some(ref failure) = agent.failure_detail {
         let failure_style = Style::default().fg(theme::COLOR_FAILURE);
@@ -392,14 +608,7 @@ fn render_agent_room(
     } else {
         format!("  📋 {} tools", agent.tools.len())
     };
-    let sub_count = if !subagents.is_empty() {
-        format!("  🤖 {} sub", subagents.len())
-    } else if completed_count > 0 {
-        format!("  ✅ {} completed", completed_count)
-    } else {
-        String::new()
-    };
-    let info = format!("⏱️ {}{}{}", duration, tool_count, sub_count);
+    let info = format!("⏱️ {}{}", duration, tool_count);
 
     let mut info_spans = vec![
         Span::styled("│ ".to_string(), border_style),
@@ -414,59 +623,6 @@ fn render_agent_room(
     info_spans.push(Span::styled("│".to_string(), border_style));
     apply_bg(&mut info_spans, bg_color, is_selected);
     lines.push(Line::from(info_spans));
-
-    // Subagent rooms (compact, inline)
-    for sub in subagents {
-        let sub_emoji = match sub.state {
-            SubagentStatus::Running => "🔧",
-            SubagentStatus::Waiting => "💤",
-            SubagentStatus::Ended => "✅",
-        };
-        let sub_desc = sub.description.as_deref().unwrap_or(&sub.short_id);
-        let sub_tool = if let Some(tool) = sub.tools.first() {
-            match &tool.detail {
-                Some(detail) => format!(": {} {}", tool.name, detail),
-                None => format!(": {}", tool.name),
-            }
-        } else {
-            String::new()
-        };
-        let sub_line = format!(
-            "  ├─ 🤖 {} {} {}{}",
-            sub.short_id, sub_emoji, sub_desc, sub_tool
-        );
-        let mut sub_spans = vec![
-            Span::styled("│ ".to_string(), border_style),
-            Span::styled(sub_line, dim_style),
-        ];
-        let used: usize = sub_spans.iter().map(|s| s.content.width()).sum();
-        let pad = content_width.saturating_sub(used + 1);
-        sub_spans.push(Span::styled(
-            " ".repeat(pad),
-            Style::default().fg(Color::Reset),
-        ));
-        sub_spans.push(Span::styled("│".to_string(), border_style));
-        apply_bg(&mut sub_spans, None, is_selected);
-        lines.push(Line::from(sub_spans));
-    }
-
-    // Completed subagents count
-    if completed_count > 0 && subagents.is_empty() {
-        let comp_line = format!("  └─ ✅ {} completed", completed_count);
-        let mut comp_spans = vec![
-            Span::styled("│ ".to_string(), border_style),
-            Span::styled(comp_line, Style::default().fg(theme::COLOR_DIM_DARK)),
-        ];
-        let used: usize = comp_spans.iter().map(|s| s.content.width()).sum();
-        let pad = content_width.saturating_sub(used + 1);
-        comp_spans.push(Span::styled(
-            " ".repeat(pad),
-            Style::default().fg(Color::Reset),
-        ));
-        comp_spans.push(Span::styled("│".to_string(), border_style));
-        apply_bg(&mut comp_spans, None, is_selected);
-        lines.push(Line::from(comp_spans));
-    }
 
     // Room bottom border
     let bottom_fill = "─".repeat(content_width.saturating_sub(2));
@@ -637,9 +793,10 @@ mod tests {
         // Use selected=1 (out of range) so is_selected is false, allowing permission bg to show
         let lines = build_office_lines(&entries, 80, 1, 0);
         assert!(lines.len() > 4);
-        // Verify permission background is applied — check that spans have the permission bg color
-        let first_line_spans = &lines[0].spans;
-        let has_permission_bg = first_line_spans
+        // Title is at line 0, room starts at line 2
+        // Verify permission background is applied on room border line
+        let room_border_spans = &lines[2].spans;
+        let has_permission_bg = room_border_spans
             .iter()
             .any(|s| s.style.bg == Some(theme::COLOR_PERMISSION_BG));
         assert!(
