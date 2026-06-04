@@ -93,11 +93,16 @@ pub fn render(
     let lines = build_office_lines(&entries, area.width, selected, anim_frame);
 
     let visible_height = area.height as usize;
-    let visible_lines: Vec<Line> = lines
+    let mut visible_lines: Vec<Line> = lines
         .into_iter()
         .skip(scroll_offset)
         .take(visible_height)
         .collect();
+
+    // Pad with empty lines to fill the entire area, clearing previous frame's content
+    while visible_lines.len() < visible_height {
+        visible_lines.push(Line::from(""));
+    }
 
     let paragraph = Paragraph::new(visible_lines);
     f.render_widget(paragraph, area);
