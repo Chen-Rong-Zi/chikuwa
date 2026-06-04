@@ -86,15 +86,12 @@ pub fn load_agent_states_from(path: &Path) -> HashMap<String, AgentState> {
             continue;
         }
 
-        if state.state == AgentStatus::Ended {
+        if state.status() == AgentStatus::Ended {
             states.remove(&state.tmux_pane);
         } else {
-            // Last write wins — but preserve session_id if incoming is None
+            // Last write wins — but use per-agent merge if same source
             if let Some(existing) = states.get(&state.tmux_pane) {
-                let mut merged = state;
-                if merged.session_id.is_none() {
-                    merged.session_id = existing.session_id.clone();
-                }
+                let merged = state.merge_with(existing);
                 states.insert(merged.tmux_pane.clone(), merged);
             } else {
                 states.insert(state.tmux_pane.clone(), state);
@@ -342,6 +339,25 @@ pub fn load_usage() -> Option<Usage> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::agent::claude::ClaudeState;
+    use crate::agent::state::AgentData;
+
+    fn make_claude_state(pane_id: &str, status: AgentStatus) -> AgentState {
+        AgentState::new(
+            pane_id.to_string(),
+            AgentData::Claude(ClaudeState {
+                session_id: None,
+                agent_id: None,
+                status,
+                hook_event_name: "PreToolUse".to_string(),
+                event_emoji: "🔧".to_string(),
+                tool_name: None,
+                tool_detail: None,
+                active_tools: Vec::new(),
+                failure_detail: None,
+            }),
+        )
+    }
 
     fn temp_dir() -> PathBuf {
         let dir = std::env::temp_dir().join("chikuwa_persist_test");
@@ -362,8 +378,8 @@ mod tests {
         let path = dir.join("test_append.jsonl");
         let _ = std::fs::remove_file(&path);
 
-        let state1 = AgentState::new("%0".to_string(), AgentStatus::Running);
-        let state2 = AgentState::new("%1".to_string(), AgentStatus::Waiting);
+        let state1 = make_claude_state("%0", AgentStatus::Running);
+        let state2 = make_claude_state("%1", AgentStatus::Waiting);
 
         write_jsonl(
             &path,
@@ -387,24 +403,19 @@ mod tests {
         let path = dir.join("test_ended.jsonl");
         let _ = std::fs::remove_file(&path);
 
-        let running = AgentState {
-            tmux_pane: "%0".to_string(),
+        let running = make_claude_state("%0", AgentStatus::Running);
+        let ended_state = ClaudeState {
             session_id: None,
             agent_id: None,
-            state: AgentStatus::Running,
-            updated_at: std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_secs(),
-            hook_event_name: None,
-            event_emoji: None,
+            status: AgentStatus::Ended,
+            hook_event_name: "SessionEnd".to_string(),
+            event_emoji: "🏁".to_string(),
             tool_name: None,
             tool_detail: None,
+            active_tools: Vec::new(),
             failure_detail: None,
-            tools: Vec::new(),
         };
-        let mut ended = running.clone();
-        ended.state = AgentStatus::Ended;
+        let ended = AgentState::new("%0".to_string(), AgentData::Claude(ended_state.clone()));
 
         write_jsonl(
             &path,
@@ -431,22 +442,15 @@ mod tests {
             .unwrap()
             .as_secs();
 
-        let state1 = AgentState {
-            tmux_pane: "%0".to_string(),
-            session_id: Some("old-session".to_string()),
-            agent_id: None,
-            state: AgentStatus::Running,
-            updated_at: now - 10,
-            hook_event_name: None,
-            event_emoji: None,
-            tool_name: None,
-            tool_detail: None,
-            failure_detail: None,
-            tools: Vec::new(),
-        };
-        let mut state2 = state1.clone();
-        state2.state = AgentStatus::Waiting;
-        state2.session_id = None; // incoming has no session_id
+        let mut state1 = make_claude_state("%0", AgentStatus::Running);
+        // Set session_id on first state
+        if let AgentData::Claude(ref mut c) = state1.data {
+            c.session_id = Some("old-session".to_string());
+        }
+        state1.updated_at = now - 10;
+
+        let mut state2 = make_claude_state("%0", AgentStatus::Waiting);
+        // No session_id on second state - should be preserved from first
         state2.updated_at = now;
 
         write_jsonl(
@@ -459,9 +463,9 @@ mod tests {
 
         let states = load_agent_states_from(&path);
         let result = states.get("%0").unwrap();
-        assert_eq!(result.state, AgentStatus::Waiting);
-        // session_id preserved from earlier entry
-        assert_eq!(result.session_id, Some("old-session".to_string()));
+        assert_eq!(result.status(), AgentStatus::Waiting);
+        // session_id preserved from earlier entry (ClaudeState::merge preserves it)
+        assert_eq!(result.session_id(), Some("old-session"));
 
         let _ = std::fs::remove_file(&path);
     }
@@ -472,27 +476,9 @@ mod tests {
         let path = dir.join("test_stale.jsonl");
         let _ = std::fs::remove_file(&path);
 
-        let now = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_secs();
-
-        let fresh = AgentState {
-            tmux_pane: "%0".to_string(),
-            session_id: None,
-            agent_id: None,
-            state: AgentStatus::Running,
-            updated_at: now,
-            hook_event_name: None,
-            event_emoji: None,
-            tool_name: None,
-            tool_detail: None,
-            failure_detail: None,
-            tools: Vec::new(),
-        };
-        let mut stale = fresh.clone();
-        stale.tmux_pane = "%1".to_string();
-        stale.updated_at = now - 25 * 60 * 60; // 25 hours ago
+        let fresh = make_claude_state("%0", AgentStatus::Running);
+        let mut stale = make_claude_state("%1", AgentStatus::Running);
+        stale.updated_at = stale.updated_at.saturating_sub(25 * 60 * 60); // 25 hours ago
 
         write_jsonl(
             &path,
@@ -555,28 +541,12 @@ mod tests {
         let path = dir.join("test_compact.jsonl");
         let _ = std::fs::remove_file(&path);
 
-        let now = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_secs();
-
         let mut states = HashMap::new();
-        states.insert(
-            "%0".to_string(),
-            AgentState {
-                tmux_pane: "%0".to_string(),
-                session_id: Some("s1".to_string()),
-                agent_id: None,
-                state: AgentStatus::Running,
-                updated_at: now,
-                hook_event_name: None,
-                event_emoji: None,
-                tool_name: None,
-                tool_detail: None,
-                failure_detail: None,
-                tools: Vec::new(),
-            },
-        );
+        let mut state = make_claude_state("%0", AgentStatus::Running);
+        if let AgentData::Claude(ref mut c) = state.data {
+            c.session_id = Some("s1".to_string());
+        }
+        states.insert("%0".to_string(), state);
 
         compact_agent_states_to(&states, &path).unwrap();
 

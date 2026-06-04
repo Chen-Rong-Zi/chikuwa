@@ -1,7 +1,9 @@
 use anyhow::{Context, Result};
 use serde::Deserialize;
 
-use super::state::{AgentState, AgentStatus, ToolInfo};
+use super::claude::ClaudeState;
+use super::opencode_state::OpenCodeState;
+use super::state::{ActiveTool, AgentData, AgentState, AgentStatus, ToolKey};
 
 /// How the TUI should display a parsed event.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -41,10 +43,11 @@ struct ClaudeHookInput {
     tool_name: Option<String>,
     #[serde(default)]
     tool_input: Option<serde_json::Value>,
-    /// PostToolUse: structured tool output. PostToolUseFailure: absent.
     #[serde(default)]
     #[allow(dead_code)]
     tool_response: Option<serde_json::Value>,
+    #[serde(default)]
+    tool_use_id: Option<String>,
     /// PostToolUseFailure: error description string.
     #[serde(default)]
     error: Option<String>,
@@ -193,7 +196,6 @@ fn claude_event_mapping(event: &str) -> Option<EventMapping> {
 }
 
 /// Extract a short detail string from tool_input based on the tool name.
-/// For tools with file paths, formats as `file_path:line_number` (nvim-compatible) when a line number is available.
 pub fn extract_tool_detail(tool_name: &str, input: &serde_json::Value) -> Option<String> {
     let s = match tool_name {
         "Bash" => input.get("command")?.as_str()?,
@@ -262,9 +264,22 @@ impl HookParser for ClaudeHookParser {
                     emoji: "🔐",
                 })
             } else {
-                // Non-permission notifications: suppress (don't update TUI state)
+                // Non-permission notifications: suppress
                 return Ok(ParseResult {
-                    state: AgentState::new(pane_id, AgentStatus::Running),
+                    state: AgentState::new(
+                        pane_id,
+                        AgentData::Claude(ClaudeState {
+                            session_id: input.session_id,
+                            agent_id: input.agent_id,
+                            status: AgentStatus::Running,
+                            hook_event_name: event_name,
+                            event_emoji: "💬".to_string(),
+                            tool_name: None,
+                            tool_detail: None,
+                            active_tools: Vec::new(),
+                            failure_detail: None,
+                        }),
+                    ),
                     display: DisplayMode::Suppress,
                 });
             }
@@ -275,36 +290,36 @@ impl HookParser for ClaudeHookParser {
         let mapping = match mapping {
             Some(m) => m,
             None => {
-                // Unknown event: log and suppress
                 eprintln!("[chikuwa hook] unknown event '{}', ignoring", event_name);
                 return Ok(ParseResult {
-                    state: AgentState::new(pane_id, AgentStatus::Running),
+                    state: AgentState::new(
+                        pane_id,
+                        AgentData::Claude(ClaudeState {
+                            session_id: input.session_id,
+                            agent_id: input.agent_id,
+                            status: AgentStatus::Running,
+                            hook_event_name: event_name,
+                            event_emoji: "❓".to_string(),
+                            tool_name: None,
+                            tool_detail: None,
+                            active_tools: Vec::new(),
+                            failure_detail: None,
+                        }),
+                    ),
                     display: DisplayMode::Suppress,
                 });
             }
         };
 
-        let mut state = AgentState::new(pane_id, mapping.status);
-        state.session_id = input.session_id.clone();
-        state.agent_id = input.agent_id.clone();
-        state.hook_event_name = Some(event_name.clone());
-        state.event_emoji = Some(mapping.emoji.to_string());
+        // Determine display mode based on event type
+        let display = match event_name.as_str() {
+            "PostToolUse" => DisplayMode::Silent,
+            "PostToolUseFailure" => DisplayMode::Show,
+            _ => DisplayMode::Show,
+        };
 
-        // Extract tool info for PreToolUse events
-        if let Some(ref name) = input.tool_name {
-            let detail = input
-                .tool_input
-                .as_ref()
-                .and_then(|inp| extract_tool_detail(name, inp));
-            state.tools = vec![ToolInfo {
-                name: name.clone(),
-                detail,
-            }];
-        }
-
-        state.tool_name = input.tool_name.clone();
-        // For non-tool events, use event-specific detail
-        state.tool_detail = extract_event_detail(&event_name, &input).or_else(|| {
+        // Extract tool_detail
+        let tool_detail = extract_event_detail(&event_name, &input).or_else(|| {
             input.tool_name.as_ref().and_then(|name| {
                 input
                     .tool_input
@@ -313,31 +328,66 @@ impl HookParser for ClaudeHookParser {
             })
         });
 
-        // Determine display mode and failure detail based on event type
-        let display = match event_name.as_str() {
-            "PostToolUse" => DisplayMode::Silent,
-            "PostToolUseFailure" => {
-                // Extract failure detail from error field, truncated
-                let detail = input
-                    .error
-                    .as_deref()
-                    .filter(|m| !m.is_empty())
-                    .map(|m| {
-                        // Truncate to ~80 chars, respecting char boundaries
-                        if m.chars().count() > 80 {
-                            format!("{}...", m.chars().take(77).collect::<String>())
-                        } else {
-                            m.to_string()
-                        }
-                    })
-                    .or_else(|| input.tool_name.as_ref().map(|n| format!("{} failed", n)));
-                state.failure_detail = detail;
-                DisplayMode::Show
-            }
-            _ => DisplayMode::Show,
+        // Build active_tools for this event
+        let active_tools = if let Some(ref name) = input.tool_name {
+            let tool_use_id = input.tool_use_id.clone().unwrap_or_else(|| {
+                // Fallback: generate a synthetic key from name + input hash
+                format!(
+                    "{}:{:x}",
+                    name,
+                    input
+                        .tool_input
+                        .as_ref()
+                        .map(|v| v.to_string().len())
+                        .unwrap_or(0)
+                )
+            });
+            vec![ActiveTool {
+                key: ToolKey::Claude { tool_use_id },
+                name: name.clone(),
+                detail: tool_detail.clone(),
+                failure_detail: None,
+            }]
+        } else {
+            Vec::new()
         };
 
-        Ok(ParseResult { state, display })
+        // Extract failure detail for PostToolUseFailure
+        let failure_detail = if event_name == "PostToolUseFailure" {
+            input
+                .error
+                .as_deref()
+                .filter(|m| !m.is_empty())
+                .map(|m| {
+                    if m.chars().count() > 80 {
+                        format!("{}...", m.chars().take(77).collect::<String>())
+                    } else {
+                        m.to_string()
+                    }
+                })
+                .or_else(|| input.tool_name.as_ref().map(|n| format!("{} failed", n)))
+        } else {
+            None
+        };
+
+        let claude_state = ClaudeState {
+            session_id: input.session_id,
+            agent_id: input.agent_id,
+            status: mapping.status,
+            hook_event_name: event_name,
+            event_emoji: mapping.emoji.to_string(),
+            tool_name: input.tool_name,
+            tool_detail,
+            active_tools,
+            failure_detail,
+        };
+
+        let agent_state = AgentState::new(pane_id, AgentData::Claude(claude_state));
+
+        Ok(ParseResult {
+            state: agent_state,
+            display,
+        })
     }
 }
 
@@ -374,25 +424,55 @@ impl HookParser for OpenCodeHookParser {
                     "[chikuwa opencode-hook] unknown event type: {}",
                     input.event_type
                 );
+                let opencode_state = OpenCodeState {
+                    session_id: input.session_id,
+                    status: AgentStatus::Running,
+                    event_type: Some(input.event_type),
+                    event_emoji: None,
+                    tool_name: None,
+                    tool_detail: None,
+                    active_tools: Vec::new(),
+                    is_busy: false,
+                };
                 return Ok(ParseResult {
-                    state: AgentState::new(pane_id, AgentStatus::Running),
+                    state: AgentState::new(pane_id, AgentData::OpenCode(opencode_state)),
                     display: DisplayMode::Suppress,
                 });
             }
         };
 
-        let mut state = AgentState::new(pane_id, status);
-        state.session_id = input.session_id;
-        state.hook_event_name = Some(input.event_type);
-        state.event_emoji = Some(emoji.to_string());
+        let mut active_tools = Vec::new();
+        let mut tool_name = None;
+        let mut tool_detail = None;
 
         if let Some(path) = input.file_path {
-            state.tool_name = Some("edit".to_string());
-            state.tool_detail = Some(path);
+            let key = ToolKey::OpenCode {
+                name: "edit".to_string(),
+                detail: Some(path.clone()),
+            };
+            active_tools.push(ActiveTool {
+                key,
+                name: "edit".to_string(),
+                detail: Some(path.clone()),
+                failure_detail: None,
+            });
+            tool_name = Some("edit".to_string());
+            tool_detail = Some(path);
         }
 
+        let opencode_state = OpenCodeState {
+            session_id: input.session_id,
+            status,
+            event_type: Some(input.event_type),
+            event_emoji: Some(emoji.to_string()),
+            tool_name,
+            tool_detail,
+            active_tools,
+            is_busy: status == AgentStatus::Running,
+        };
+
         Ok(ParseResult {
-            state,
+            state: AgentState::new(pane_id, AgentData::OpenCode(opencode_state)),
             display: DisplayMode::Show,
         })
     }
@@ -402,15 +482,30 @@ impl HookParser for OpenCodeHookParser {
 mod tests {
     use super::*;
 
+    fn claude_data(result: &ParseResult) -> &ClaudeState {
+        match &result.state.data {
+            AgentData::Claude(c) => c,
+            _ => panic!("expected Claude data"),
+        }
+    }
+
+    fn opencode_data(result: &ParseResult) -> &OpenCodeState {
+        match &result.state.data {
+            AgentData::OpenCode(o) => o,
+            _ => panic!("expected OpenCode data"),
+        }
+    }
+
     #[test]
     fn test_claude_hook_input_deserialize() {
         let json = r#"{"hook_event_name":"SessionStart","session_id":"abc123"}"#;
         let parser = ClaudeHookParser;
         let result = parser.parse("%0".to_string(), json).unwrap();
         assert!(result.display == DisplayMode::Show);
-        assert_eq!(result.state.state, AgentStatus::Started);
-        assert_eq!(result.state.event_emoji.as_deref(), Some("🚀"));
-        assert_eq!(result.state.session_id.as_deref(), Some("abc123"));
+        let data = claude_data(&result);
+        assert_eq!(data.status, AgentStatus::Started);
+        assert_eq!(data.event_emoji, "🚀");
+        assert_eq!(data.session_id.as_deref(), Some("abc123"));
     }
 
     #[test]
@@ -419,21 +514,29 @@ mod tests {
         let parser = ClaudeHookParser;
         let result = parser.parse("%0".to_string(), json).unwrap();
         assert!(result.display == DisplayMode::Show);
-        assert_eq!(result.state.state, AgentStatus::Ended);
-        assert_eq!(result.state.event_emoji.as_deref(), Some("🏁"));
+        let data = claude_data(&result);
+        assert_eq!(data.status, AgentStatus::Ended);
+        assert_eq!(data.event_emoji, "🏁");
     }
 
     #[test]
     fn test_claude_hook_pre_tool_use() {
-        let json = r#"{"hook_event_name":"PreToolUse","tool_name":"Bash","tool_input":{"command":"ls -la"}}"#;
+        let json = r#"{"hook_event_name":"PreToolUse","tool_name":"Bash","tool_input":{"command":"ls -la"},"tool_use_id":"toolu_01ABC"}"#;
         let parser = ClaudeHookParser;
         let result = parser.parse("%0".to_string(), json).unwrap();
         assert!(result.display == DisplayMode::Show);
-        assert_eq!(result.state.state, AgentStatus::Running);
-        assert_eq!(result.state.event_emoji.as_deref(), Some("🔧"));
-        assert_eq!(result.state.tools.len(), 1);
-        assert_eq!(result.state.tools[0].name, "Bash");
-        assert_eq!(result.state.tools[0].detail.as_deref(), Some("ls -la"));
+        let data = claude_data(&result);
+        assert_eq!(data.status, AgentStatus::Running);
+        assert_eq!(data.event_emoji, "🔧");
+        assert_eq!(data.active_tools.len(), 1);
+        assert_eq!(data.active_tools[0].name, "Bash");
+        assert_eq!(data.active_tools[0].detail.as_deref(), Some("ls -la"));
+        assert_eq!(
+            data.active_tools[0].key,
+            ToolKey::Claude {
+                tool_use_id: "toolu_01ABC".to_string()
+            }
+        );
     }
 
     #[test]
@@ -442,8 +545,9 @@ mod tests {
         let parser = ClaudeHookParser;
         let result = parser.parse("%0".to_string(), json).unwrap();
         assert!(result.display == DisplayMode::Show);
-        assert_eq!(result.state.state, AgentStatus::Permission);
-        assert_eq!(result.state.event_emoji.as_deref(), Some("🔐"));
+        let data = claude_data(&result);
+        assert_eq!(data.status, AgentStatus::Permission);
+        assert_eq!(data.event_emoji, "🔐");
     }
 
     #[test]
@@ -467,8 +571,9 @@ mod tests {
         let json = r#"{"hook_event_name":"Stop"}"#;
         let parser = ClaudeHookParser;
         let result = parser.parse("%0".to_string(), json).unwrap();
-        assert_eq!(result.state.state, AgentStatus::Waiting);
-        assert_eq!(result.state.event_emoji.as_deref(), Some("💤"));
+        let data = claude_data(&result);
+        assert_eq!(data.status, AgentStatus::Waiting);
+        assert_eq!(data.event_emoji, "💤");
     }
 
     #[test]
@@ -476,8 +581,9 @@ mod tests {
         let json = r#"{"hook_event_name":"StopFailure"}"#;
         let parser = ClaudeHookParser;
         let result = parser.parse("%0".to_string(), json).unwrap();
-        assert_eq!(result.state.state, AgentStatus::Waiting);
-        assert_eq!(result.state.event_emoji.as_deref(), Some("⚠️"));
+        let data = claude_data(&result);
+        assert_eq!(data.status, AgentStatus::Waiting);
+        assert_eq!(data.event_emoji, "⚠️");
     }
 
     #[test]
@@ -527,9 +633,10 @@ mod tests {
         let json = r#"{"hook_event_name":"SubagentStart","agent_id":"abc123","tool_name":"Task","tool_input":{"description":"Search codebase"}}"#;
         let parser = ClaudeHookParser;
         let result = parser.parse("%0".to_string(), json).unwrap();
-        assert_eq!(result.state.state, AgentStatus::Running);
-        assert_eq!(result.state.event_emoji.as_deref(), Some("🤖"));
-        assert_eq!(result.state.agent_id.as_deref(), Some("abc123"));
+        let data = claude_data(&result);
+        assert_eq!(data.status, AgentStatus::Running);
+        assert_eq!(data.event_emoji, "🤖");
+        assert_eq!(data.agent_id.as_deref(), Some("abc123"));
     }
 
     #[test]
@@ -537,8 +644,9 @@ mod tests {
         let json = r#"{"hook_event_name":"SubagentStop","agent_id":"abc123"}"#;
         let parser = ClaudeHookParser;
         let result = parser.parse("%0".to_string(), json).unwrap();
-        assert_eq!(result.state.state, AgentStatus::Ended);
-        assert_eq!(result.state.event_emoji.as_deref(), Some("🏁"));
+        let data = claude_data(&result);
+        assert_eq!(data.status, AgentStatus::Ended);
+        assert_eq!(data.event_emoji, "🏁");
     }
 
     #[test]
@@ -546,10 +654,87 @@ mod tests {
         let json = r#"{"hook_event_name":"CwdChanged","cwd":"/home/user/project"}"#;
         let parser = ClaudeHookParser;
         let result = parser.parse("%0".to_string(), json).unwrap();
-        assert_eq!(result.state.state, AgentStatus::Running);
+        let data = claude_data(&result);
+        assert_eq!(data.status, AgentStatus::Running);
+        assert_eq!(data.tool_detail.as_deref(), Some("/home/user/project"));
+    }
+
+    #[test]
+    fn test_claude_hook_post_tool_use_silent() {
+        let json = r#"{"hook_event_name":"PostToolUse","tool_name":"Bash","tool_input":{"command":"ls"},"tool_use_id":"toolu_01"}"#;
+        let parser = ClaudeHookParser;
+        let result = parser.parse("%0".to_string(), json).unwrap();
+        assert_eq!(result.display, DisplayMode::Silent);
+        let data = claude_data(&result);
+        assert_eq!(data.status, AgentStatus::Running);
+        assert!(data.failure_detail.is_none());
+    }
+
+    #[test]
+    fn test_claude_hook_post_tool_use_failure_with_error() {
+        let json = r#"{"hook_event_name":"PostToolUseFailure","tool_name":"Bash","error":"command failed with exit code 1","tool_use_id":"toolu_02"}"#;
+        let parser = ClaudeHookParser;
+        let result = parser.parse("%0".to_string(), json).unwrap();
+        assert_eq!(result.display, DisplayMode::Show);
+        let data = claude_data(&result);
+        assert_eq!(data.status, AgentStatus::Running);
         assert_eq!(
-            result.state.tool_detail.as_deref(),
-            Some("/home/user/project")
+            data.failure_detail.as_deref(),
+            Some("command failed with exit code 1")
+        );
+    }
+
+    #[test]
+    fn test_claude_hook_post_tool_use_failure_fallback() {
+        let json = r#"{"hook_event_name":"PostToolUseFailure","tool_name":"Read","tool_use_id":"toolu_03"}"#;
+        let parser = ClaudeHookParser;
+        let result = parser.parse("%0".to_string(), json).unwrap();
+        let data = claude_data(&result);
+        assert_eq!(data.failure_detail.as_deref(), Some("Read failed"));
+    }
+
+    #[test]
+    fn test_claude_hook_post_tool_use_failure_truncation() {
+        let long_msg = "x".repeat(100);
+        let json = format!(
+            r#"{{"hook_event_name":"PostToolUseFailure","tool_name":"Bash","error":"{}","tool_use_id":"toolu_04"}}"#,
+            long_msg
+        );
+        let parser = ClaudeHookParser;
+        let result = parser.parse("%0".to_string(), &json).unwrap();
+        let detail = claude_data(&result).failure_detail.clone().unwrap();
+        assert!(detail.ends_with("..."));
+    }
+
+    #[test]
+    fn test_claude_hook_post_tool_use_failure_utf8_truncation() {
+        let long_msg = "日本語".repeat(30);
+        let json = format!(
+            r#"{{"hook_event_name":"PostToolUseFailure","tool_name":"Bash","error":"{}","tool_use_id":"toolu_05"}}"#,
+            long_msg
+        );
+        let parser = ClaudeHookParser;
+        let result = parser.parse("%0".to_string(), &json).unwrap();
+        assert!(claude_data(&result).failure_detail.is_some());
+        assert!(claude_data(&result)
+            .failure_detail
+            .as_ref()
+            .unwrap()
+            .ends_with("..."));
+    }
+
+    #[test]
+    fn test_claude_hook_tool_use_id_in_active_tool() {
+        let json = r#"{"hook_event_name":"PreToolUse","tool_name":"Read","tool_input":{"file_path":"/src/main.rs","offset":42},"tool_use_id":"toolu_ABC123"}"#;
+        let parser = ClaudeHookParser;
+        let result = parser.parse("%0".to_string(), json).unwrap();
+        let data = claude_data(&result);
+        assert_eq!(data.active_tools.len(), 1);
+        assert_eq!(
+            data.active_tools[0].key,
+            ToolKey::Claude {
+                tool_use_id: "toolu_ABC123".to_string()
+            }
         );
     }
 
@@ -559,8 +744,9 @@ mod tests {
         let parser = OpenCodeHookParser;
         let result = parser.parse("%0".to_string(), json).unwrap();
         assert!(result.display == DisplayMode::Show);
-        assert_eq!(result.state.state, AgentStatus::Running);
-        assert_eq!(result.state.event_emoji.as_deref(), Some("📝"));
+        let data = opencode_data(&result);
+        assert_eq!(data.status, AgentStatus::Running);
+        assert_eq!(data.event_emoji.as_deref(), Some("📝"));
     }
 
     #[test]
@@ -568,74 +754,9 @@ mod tests {
         let json = r#"{"type":"session_completed","session_id":"sess-123"}"#;
         let parser = OpenCodeHookParser;
         let result = parser.parse("%0".to_string(), json).unwrap();
-        assert_eq!(result.state.state, AgentStatus::Ended);
-        assert_eq!(result.state.event_emoji.as_deref(), Some("🏁"));
-    }
-
-    #[test]
-    fn test_claude_hook_post_tool_use_silent() {
-        let json =
-            r#"{"hook_event_name":"PostToolUse","tool_name":"Bash","tool_input":{"command":"ls"}}"#;
-        let parser = ClaudeHookParser;
-        let result = parser.parse("%0".to_string(), json).unwrap();
-        assert_eq!(result.display, DisplayMode::Silent);
-        assert_eq!(result.state.state, AgentStatus::Running);
-        assert!(result.state.failure_detail.is_none());
-    }
-
-    #[test]
-    fn test_claude_hook_post_tool_use_failure_with_message() {
-        let json = r#"{"hook_event_name":"PostToolUseFailure","tool_name":"Bash","error":"command failed with exit code 1"}"#;
-        let parser = ClaudeHookParser;
-        let result = parser.parse("%0".to_string(), json).unwrap();
-        assert_eq!(result.display, DisplayMode::Show);
-        assert_eq!(result.state.state, AgentStatus::Running);
-        assert_eq!(
-            result.state.failure_detail.as_deref(),
-            Some("command failed with exit code 1")
-        );
-    }
-
-    #[test]
-    fn test_claude_hook_post_tool_use_failure_fallback() {
-        let json = r#"{"hook_event_name":"PostToolUseFailure","tool_name":"Read"}"#;
-        let parser = ClaudeHookParser;
-        let result = parser.parse("%0".to_string(), json).unwrap();
-        assert_eq!(result.display, DisplayMode::Show);
-        assert_eq!(result.state.failure_detail.as_deref(), Some("Read failed"));
-    }
-
-    #[test]
-    fn test_claude_hook_post_tool_use_failure_truncation() {
-        let long_msg = "x".repeat(100);
-        let json = format!(
-            r#"{{"hook_event_name":"PostToolUseFailure","tool_name":"Bash","error":"{}"}}"#,
-            long_msg
-        );
-        let parser = ClaudeHookParser;
-        let result = parser.parse("%0".to_string(), &json).unwrap();
-        let detail = result.state.failure_detail.unwrap();
-        assert!(detail.len() <= 83); // 77 chars + "..." = 80 display + 3 for "..."
-        assert!(detail.ends_with("..."));
-    }
-
-    #[test]
-    fn test_claude_hook_post_tool_use_failure_utf8_truncation() {
-        // Multi-byte characters should not panic during truncation
-        let long_msg = "日本語".repeat(30); // 90 chars, all multi-byte
-        let json = format!(
-            r#"{{"hook_event_name":"PostToolUseFailure","tool_name":"Bash","error":"{}"}}"#,
-            long_msg
-        );
-        let parser = ClaudeHookParser;
-        let result = parser.parse("%0".to_string(), &json).unwrap();
-        assert!(result.state.failure_detail.is_some());
-        assert!(result
-            .state
-            .failure_detail
-            .as_ref()
-            .unwrap()
-            .ends_with("..."));
+        let data = opencode_data(&result);
+        assert_eq!(data.status, AgentStatus::Ended);
+        assert_eq!(data.event_emoji.as_deref(), Some("🏁"));
     }
 
     #[test]

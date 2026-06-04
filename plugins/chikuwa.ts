@@ -24,18 +24,27 @@ const log = (msg: string, data?: unknown) => {
 	}
 };
 
-interface AgentState {
-	tmux_pane: string;
+interface OpenCodeState {
 	session_id?: string;
-	state: "started" | "running" | "waiting" | "permission" | "ended";
-	updated_at: number;
-	hook_event_name?: string;
+	status: "started" | "running" | "waiting" | "permission" | "ended";
+	event_type?: string;
+	event_emoji?: string;
 	tool_name?: string;
 	tool_detail?: string;
-	tools?: Array<{ name: string; detail?: string }>;
+	active_tools: ActiveTool[];
+	is_busy: boolean;
 }
 
-interface ToolInfo {
+interface AgentState {
+	tmux_pane: string;
+	updated_at: number;
+	data: {
+		type: "opencode";
+	} & OpenCodeState;
+}
+
+interface ActiveTool {
+	key: { type: "opencode"; name: string; detail?: string };
 	name: string;
 	detail?: string;
 }
@@ -51,6 +60,15 @@ const appendAgentState = (state: AgentState) => {
 		log("Failed to append agent state", { error: String(e) });
 	}
 };
+
+const makeState = (tmux_pane: string, opencode: Omit<OpenCodeState, never>): AgentState => ({
+	tmux_pane,
+	updated_at: now(),
+	data: {
+		type: "opencode",
+		...opencode,
+	},
+});
 
 const sendToIpc = async ($: any, state: AgentState) => {
 	try {
@@ -101,7 +119,7 @@ export const ChikuwaPlugin = async ({ client, directory, $ }: { client: any; dir
 	log("Plugin loading", { tmuxPane, directory });
 
 	let currentSessionId = "";
-	let activeTools: ToolInfo[] = [];
+	let activeTools: ActiveTool[] = [];
 	let isBusy = false;
 
 	const sendState = async (state: AgentState) => {
@@ -125,21 +143,24 @@ export const ChikuwaPlugin = async ({ client, directory, $ }: { client: any; dir
 
 			if (input.sessionID) updateSession(input.sessionID);
 
-			const toolInfo: ToolInfo = { name: toolName, detail: toolDetail };
-			if (!activeTools.some(t => t.name === toolName && t.detail === toolDetail)) {
-				activeTools.push(toolInfo);
+			const tool: ActiveTool = {
+				key: { type: "opencode", name: toolName, detail: toolDetail },
+				name: toolName,
+				detail: toolDetail,
+			};
+			if (!activeTools.some(t => t.key.name === toolName && t.key.detail === toolDetail)) {
+				activeTools.push(tool);
 			}
 
-			await sendState({
-				tmux_pane: tmuxPane,
+			await sendState(makeState(tmuxPane, {
 				session_id: currentSessionId || undefined,
-				state: "running",
-				updated_at: now(),
-				hook_event_name: "tool.execute",
+				status: "running",
+				event_type: "tool.execute",
 				tool_name: toolName,
 				tool_detail: toolDetail,
-				tools: [...activeTools],
-			});
+				active_tools: [...activeTools],
+				is_busy: true,
+			}));
 		},
 
 		// Main event handler - OpenCode sends all events through this
@@ -164,23 +185,25 @@ export const ChikuwaPlugin = async ({ client, directory, $ }: { client: any; dir
 					if (status.type === "busy" && !isBusy) {
 						isBusy = true;
 						activeTools = [];
-						await sendState({
-							tmux_pane: tmuxPane,
+						await sendState(makeState(tmuxPane, {
 							session_id: currentSessionId || undefined,
-							state: "started",
-							updated_at: now(),
-							hook_event_name: "session.busy",
-						});
+							status: "started",
+							event_type: "session.busy",
+							event_emoji: "🚀",
+							active_tools: [],
+							is_busy: true,
+						}));
 					} else if (status.type === "idle" && isBusy) {
 						isBusy = false;
 						activeTools = [];
-						await sendState({
-							tmux_pane: tmuxPane,
+						await sendState(makeState(tmuxPane, {
 							session_id: currentSessionId || undefined,
-							state: "waiting",
-							updated_at: now(),
-							hook_event_name: "session.idle",
-						});
+							status: "waiting",
+							event_type: "session.idle",
+							event_emoji: "💤",
+							active_tools: [],
+							is_busy: false,
+						}));
 					}
 					break;
 				}
@@ -189,38 +212,41 @@ export const ChikuwaPlugin = async ({ client, directory, $ }: { client: any; dir
 					log("Session idle event");
 					isBusy = false;
 					activeTools = [];
-					await sendState({
-						tmux_pane: tmuxPane,
+					await sendState(makeState(tmuxPane, {
 						session_id: currentSessionId || undefined,
-						state: "waiting",
-						updated_at: now(),
-						hook_event_name: "session.idle",
-					});
+						status: "waiting",
+						event_type: "session.idle",
+						event_emoji: "💤",
+						active_tools: [],
+						is_busy: false,
+					}));
 					break;
 				}
 
 				case "session.created": {
 					const newSessionId = props.session?.id || props.id || sessionId;
 					if (newSessionId) updateSession(newSessionId);
-					await sendState({
-						tmux_pane: tmuxPane,
+					await sendState(makeState(tmuxPane, {
 						session_id: newSessionId || currentSessionId || undefined,
-						state: "started",
-						updated_at: now(),
-						hook_event_name: "session.created",
-					});
+						status: "started",
+						event_type: "session.created",
+						event_emoji: "🚀",
+						active_tools: [],
+						is_busy: false,
+					}));
 					break;
 				}
 
 				case "session.deleted": {
 					if (props.sessionID === currentSessionId) {
-						await sendState({
-							tmux_pane: tmuxPane,
+						await sendState(makeState(tmuxPane, {
 							session_id: currentSessionId,
-							state: "ended",
-							updated_at: now(),
-							hook_event_name: "session.deleted",
-						});
+							status: "ended",
+							event_type: "session.deleted",
+							event_emoji: "🏁",
+							active_tools: [],
+							is_busy: false,
+						}));
 						currentSessionId = "";
 						isBusy = false;
 						activeTools = [];
@@ -241,31 +267,44 @@ export const ChikuwaPlugin = async ({ client, directory, $ }: { client: any; dir
 
 					if (toolStatus === "running") {
 						const toolDetail = toolInput ? extractToolDetail(toolName, toolInput) : undefined;
-						const toolInfo: ToolInfo = { name: toolName, detail: toolDetail };
-						if (!activeTools.some(t => t.name === toolName && t.detail === toolDetail)) {
-							activeTools.push(toolInfo);
+						const tool: ActiveTool = {
+							key: { type: "opencode", name: toolName, detail: toolDetail },
+							name: toolName,
+							detail: toolDetail,
+						};
+						if (!activeTools.some(t => t.key.name === toolName && t.key.detail === toolDetail)) {
+							activeTools.push(tool);
 						}
-						await sendState({
-							tmux_pane: tmuxPane,
+						await sendState(makeState(tmuxPane, {
 							session_id: currentSessionId || undefined,
-							state: "running",
-							updated_at: now(),
-							hook_event_name: "tool.running",
+							status: "running",
+							event_type: "tool.running",
+							event_emoji: "🔧",
 							tool_name: toolName,
 							tool_detail: toolDetail,
-							tools: [...activeTools],
-						});
+							active_tools: [...activeTools],
+							is_busy: true,
+						}));
 					} else if (toolStatus === "completed" || toolStatus === "error") {
-						activeTools = activeTools.filter(t => t.name !== toolName);
-						await sendState({
-							tmux_pane: tmuxPane,
+						const toolDetail = toolInput ? extractToolDetail(toolName, toolInput) : undefined;
+						// Match by key (name+detail) to correctly handle parallel tool calls
+						activeTools = activeTools.filter(
+							t => !(t.key.name === toolName && t.key.detail === toolDetail)
+						);
+						// Include the removing tool so Rust merge can match by key
+						const removingTool: ActiveTool = {
+							key: { type: "opencode", name: toolName, detail: toolDetail },
+							name: toolName,
+							detail: toolDetail,
+						};
+						await sendState(makeState(tmuxPane, {
 							session_id: currentSessionId || undefined,
-							state: "running",
-							updated_at: now(),
-							hook_event_name: `tool.${toolStatus}`,
+							status: "running",
+							event_type: `tool.${toolStatus}`,
 							tool_name: toolName,
-							tools: [...activeTools],
-						});
+							active_tools: [removingTool, ...activeTools],
+							is_busy: true,
+						}));
 					}
 					break;
 				}
@@ -274,42 +313,48 @@ export const ChikuwaPlugin = async ({ client, directory, $ }: { client: any; dir
 				case "file.edited": {
 					const filePath = props.path || props.filePath;
 					if (!filePath) return;
-					await sendState({
-						tmux_pane: tmuxPane,
+					const tool: ActiveTool = {
+						key: { type: "opencode", name: "edit", detail: filePath },
+						name: "edit",
+						detail: filePath,
+					};
+					await sendState(makeState(tmuxPane, {
 						session_id: currentSessionId || undefined,
-						state: "running",
-						updated_at: now(),
-						hook_event_name: "file.edited",
+						status: "running",
+						event_type: "file.edited",
+						event_emoji: "📝",
 						tool_name: "edit",
 						tool_detail: filePath,
-					});
+						active_tools: [tool],
+						is_busy: true,
+					}));
 					break;
 				}
 
 				// Permission events
 				case "permission.asked":
 				case "permission.updated": {
-					await sendState({
-						tmux_pane: tmuxPane,
+					await sendState(makeState(tmuxPane, {
 						session_id: currentSessionId || undefined,
-						state: "permission",
-						updated_at: now(),
-						hook_event_name: "permission.asked",
+						status: "permission",
+						event_type: "permission.asked",
+						event_emoji: "🔐",
 						tool_detail: props.permission?.tool || props.permission?.type,
-					});
+						active_tools: [...activeTools],
+						is_busy: false,
+					}));
 					break;
 				}
 
 				case "permission.replied": {
 					if (isBusy) {
-						await sendState({
-							tmux_pane: tmuxPane,
+						await sendState(makeState(tmuxPane, {
 							session_id: currentSessionId || undefined,
-							state: "running",
-							updated_at: now(),
-							hook_event_name: "permission.replied",
-							tools: [...activeTools],
-						});
+							status: "running",
+							event_type: "permission.replied",
+							active_tools: [...activeTools],
+							is_busy: true,
+						}));
 					}
 					break;
 				}
@@ -318,15 +363,15 @@ export const ChikuwaPlugin = async ({ client, directory, $ }: { client: any; dir
 				case "command.executed": {
 					const command = props.command;
 					if (Array.isArray(command) && command[0] === "bash") {
-						await sendState({
-							tmux_pane: tmuxPane,
+						await sendState(makeState(tmuxPane, {
 							session_id: currentSessionId || undefined,
-							state: "running",
-							updated_at: now(),
-							hook_event_name: "command.executed",
+							status: "running",
+							event_type: "command.executed",
 							tool_name: "bash",
 							tool_detail: command.slice(1).join(" "),
-						});
+							active_tools: [...activeTools],
+							is_busy: true,
+						}));
 					}
 					break;
 				}

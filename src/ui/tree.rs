@@ -7,7 +7,7 @@ use ratatui::widgets::Paragraph;
 use ratatui::Frame;
 use unicode_width::UnicodeWidthStr;
 
-use crate::agent::state::{AgentState, AgentStatus};
+use crate::agent::state::{AgentState, AgentStatus, AgentView};
 use crate::agent::{SubagentInfo, SubagentStatus};
 use crate::git::GitInfo;
 use crate::tmux::types::{TmuxPane, TmuxSession};
@@ -955,8 +955,12 @@ fn agent_status_visual_rows(item: &TreeItem) -> usize {
         },
         _ => return 0,
     };
-    1 + agent.tools.len().min(MAX_VISIBLE_TOOLS)
-        + if agent.failure_detail.is_some() { 1 } else { 0 }
+    1 + agent.active_tools().len().min(MAX_VISIBLE_TOOLS)
+        + if agent.failure_detail().is_some() {
+            1
+        } else {
+            0
+        }
 }
 
 /// Render an agent status sub-line (e.g. "· running") for an item.
@@ -988,7 +992,7 @@ fn render_bordered_agent_status_sub_lines(
     let border_style = session_border_style(session_attached);
     let dim_style = Style::default().fg(Color::Rgb(0x7a, 0x7a, 0x7a));
 
-    let status_label = match agent.state {
+    let status_label = match agent.status() {
         AgentStatus::Started => "starting",
         AgentStatus::Running => "running",
         AgentStatus::Waiting => "waiting",
@@ -1000,20 +1004,21 @@ fn render_bordered_agent_status_sub_lines(
     let mut status_spans = vec![
         Span::styled(prefix.to_string(), Style::default().fg(theme::COLOR_PURPLE)),
         Span::styled(
-            theme::status_icon(&agent.state, anim_frame).to_string(),
-            theme::status_style(&agent.state, session_attached),
+            theme::status_icon(&agent.status(), anim_frame).to_string(),
+            theme::status_style(&agent.status(), session_attached),
         ),
         Span::styled(format!(" {}", status_label), dim_style),
     ];
     // Add event emoji if available
-    if let Some(ref emoji) = agent.event_emoji {
+    if let Some(emoji) = agent.event_emoji() {
         status_spans.push(Span::styled(format!(" {}", emoji), dim_style));
     }
-    if !agent.tools.is_empty() {
-        let tool_count_label = if agent.tools.len() == 1 {
+    let active_tools = agent.active_tools();
+    if !active_tools.is_empty() {
+        let tool_count_label = if active_tools.len() == 1 {
             " (1 tool)".to_string()
         } else {
-            format!(" ({} tools)", agent.tools.len())
+            format!(" ({} tools)", active_tools.len())
         };
         status_spans.push(Span::styled(tool_count_label, dim_style));
     }
@@ -1026,10 +1031,10 @@ fn render_bordered_agent_status_sub_lines(
     )];
 
     // Tool lines (one row per active tool, capped to most recent MAX_VISIBLE_TOOLS)
-    let visible_tools = if agent.tools.len() > MAX_VISIBLE_TOOLS {
-        &agent.tools[agent.tools.len() - MAX_VISIBLE_TOOLS..]
+    let visible_tools = if active_tools.len() > MAX_VISIBLE_TOOLS {
+        &active_tools[active_tools.len() - MAX_VISIBLE_TOOLS..]
     } else {
-        &agent.tools
+        active_tools
     };
     for tool in visible_tools {
         let tool_text = match &tool.detail {
@@ -1056,7 +1061,7 @@ fn render_bordered_agent_status_sub_lines(
     }
 
     // Failure detail line (red ❌)
-    if let Some(ref failure) = agent.failure_detail {
+    if let Some(failure) = agent.failure_detail() {
         let failure_style = Style::default().fg(theme::COLOR_FAILURE);
         let mut failure_spans = vec![
             Span::styled(
@@ -1503,7 +1508,7 @@ fn render_content_spans(
                         window_name.clone()
                     };
                 let needs_attention = matches!(
-                    agent_state.as_ref().map(|a| &a.state),
+                    agent_state.as_ref().map(|a| a.status()),
                     Some(AgentStatus::Permission | AgentStatus::Waiting)
                 );
                 if needs_attention {
@@ -1552,7 +1557,7 @@ fn render_content_spans(
                 pane.agent_state.is_some(),
             );
             let needs_attention = matches!(
-                pane.agent_state.as_ref().map(|a| &a.state),
+                pane.agent_state.as_ref().map(|a| a.status()),
                 Some(AgentStatus::Permission | AgentStatus::Waiting)
             );
             if needs_attention {
@@ -1575,7 +1580,8 @@ fn render_content_spans(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::agent::state::AgentStatus;
+    use crate::agent::claude::ClaudeState;
+    use crate::agent::state::{AgentData, AgentStatus};
     use crate::tmux::types::{TmuxPane, TmuxSession, TmuxWindow};
     use std::collections::HashSet;
 
@@ -1621,19 +1627,20 @@ mod tests {
                         panes: vec![make_pane(
                             "%0",
                             "node",
-                            Some(AgentState {
-                                tmux_pane: "%0".to_string(),
-                                session_id: None,
-                                agent_id: None,
-                                state: AgentStatus::Running,
-                                updated_at: 100,
-                                hook_event_name: None,
-                                event_emoji: None,
-                                tool_name: None,
-                                tool_detail: None,
-                                failure_detail: None,
-                                tools: Vec::new(),
-                            }),
+                            Some(AgentState::new(
+                                "%0".to_string(),
+                                AgentData::Claude(ClaudeState {
+                                    session_id: None,
+                                    agent_id: None,
+                                    status: AgentStatus::Running,
+                                    hook_event_name: "PreToolUse".to_string(),
+                                    event_emoji: "🔧".to_string(),
+                                    tool_name: None,
+                                    tool_detail: None,
+                                    active_tools: Vec::new(),
+                                    failure_detail: None,
+                                }),
+                            )),
                         )],
                     },
                     TmuxWindow {
@@ -1704,7 +1711,7 @@ mod tests {
 
         if let TreeItem::Window { agent_state, .. } = &items[1] {
             assert!(agent_state.is_some());
-            assert_eq!(agent_state.as_ref().unwrap().state, AgentStatus::Running);
+            assert_eq!(agent_state.as_ref().unwrap().status(), AgentStatus::Running);
         } else {
             panic!("Expected Window item");
         }

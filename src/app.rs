@@ -21,7 +21,7 @@ use ratatui::widgets::Paragraph;
 use ratatui::Terminal;
 use tokio::sync::mpsc;
 
-use crate::agent::state::AgentState;
+use crate::agent::state::{AgentState, AgentView};
 use crate::agent::{SubagentInfo, SubagentStatus};
 use crate::event::{self, Action, AppEvent};
 use crate::git::GitInfoCache;
@@ -545,7 +545,7 @@ impl App {
         use crate::agent::state::AgentStatus;
 
         // Handle subagent ended
-        if state.state == AgentStatus::Ended {
+        if state.status() == AgentStatus::Ended {
             // Only increment completed count if subagent actually existed
             let existed = self
                 .subagent_states
@@ -581,35 +581,29 @@ impl App {
         match entry {
             std::collections::hash_map::Entry::Occupied(mut e) => {
                 let info = e.get_mut();
-                let event = state.hook_event_name.as_deref().unwrap_or("");
+                let event = state.event_label();
                 // PostToolUse is Silent: only update tools, preserve visual state
                 if event != "PostToolUse" {
-                    info.state = SubagentStatus::from(state.state);
+                    info.state = SubagentStatus::from(state.status());
                 }
                 info.updated_at = state.updated_at;
 
                 // Merge tools based on event
                 match event {
                     "PreToolUse" => {
-                        if let Some(tool) = state.tools.first() {
-                            if !info
-                                .tools
-                                .iter()
-                                .any(|t| t.name == tool.name && t.detail == tool.detail)
-                            {
+                        if let Some(tool) = state.active_tools().first() {
+                            if !info.tools.iter().any(|t| t.key == tool.key) {
                                 info.tools.push(tool.clone());
                             }
                         }
                     }
                     "PostToolUse" | "PostToolUseFailure" => {
-                        if let Some(removing) = state.tools.first() {
-                            // Try exact match first (name + detail), fall back to name-only
+                        if let Some(removing) = state.active_tools().first() {
+                            // Try exact key match first, fall back to name-only
                             if let Some(pos) = info
                                 .tools
                                 .iter()
-                                .position(|t| {
-                                    t.name == removing.name && t.detail == removing.detail
-                                })
+                                .position(|t| t.key == removing.key)
                                 .or_else(|| info.tools.iter().position(|t| t.name == removing.name))
                             {
                                 info.tools.remove(pos);
@@ -626,16 +620,16 @@ impl App {
             }
             std::collections::hash_map::Entry::Vacant(e) => {
                 // New subagent - extract description from Task tool if available
-                let description = if state.tool_name.as_deref() == Some("Task") {
-                    state.tools.first().and_then(|t| t.detail.clone())
+                let description = if state.current_tool_name() == Some("Task") {
+                    state.active_tools().first().and_then(|t| t.detail.clone())
                 } else {
                     None
                 };
 
                 let mut info = SubagentInfo::new(agent_id, description);
-                info.state = SubagentStatus::from(state.state);
+                info.state = SubagentStatus::from(state.status());
                 info.updated_at = state.updated_at;
-                if let Some(tool) = state.tools.first() {
+                if let Some(tool) = state.active_tools().first() {
                     info.tools.push(tool.clone());
                 }
 
@@ -933,7 +927,7 @@ async fn run_app(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Resul
             let has_running = app
                 .agent_states
                 .values()
-                .any(|s| s.state == crate::agent::state::AgentStatus::Running);
+                .any(|s| s.status() == crate::agent::state::AgentStatus::Running);
             let title_spans = if has_running {
                 // Shine effect: white highlight sweeps across purple base
                 let wave_palette = {
@@ -1207,94 +1201,25 @@ async fn run_app(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Resul
                         Some(std::time::Instant::now() + Duration::from_secs(next_secs));
                 }
                 AppEvent::AgentStateUpdate(state) => {
-                    // Determine if this is a subagent event
-                    if let Some(ref agent_id) = state.agent_id {
+                    // Determine if this is a subagent event (Claude with agent_id)
+                    if state.agent_id().is_some()
+                        && state.source() == crate::agent::state::AgentSource::Claude
+                    {
                         // Subagent event
                         let pane_id = state.tmux_pane.clone();
-                        let agent_id = agent_id.clone();
+                        let agent_id = state.agent_id().unwrap().to_string();
                         app.merge_subagent_state(pane_id, agent_id, state);
                     } else {
                         // Main agent event
                         use crate::agent::state::AgentStatus;
-                        if state.state == AgentStatus::Ended {
+                        if state.status() == AgentStatus::Ended {
                             app.agent_states.remove(&state.tmux_pane);
                         } else if let Some(existing) = app.agent_states.get(&state.tmux_pane) {
-                            // Preserve existing session_id if incoming is None
-                            let session_id = state
-                                .session_id
-                                .clone()
-                                .or_else(|| existing.session_id.clone());
-                            let event = state.hook_event_name.as_deref().unwrap_or("").to_string();
-                            // PostToolUse is Silent: only update tools list, preserve visual state
-                            let is_silent = event == "PostToolUse";
-                            // Merge active tools list based on hook event
-                            let tools = if state.state == AgentStatus::Running {
-                                match event.as_str() {
-                                    "PreToolUse" => {
-                                        let mut tools = existing.tools.clone();
-                                        // Don't add "Agent" tool to main agent - it spawns subagents
-                                        for tool in &state.tools {
-                                            if tool.name != "Agent" {
-                                                tools.push(tool.clone());
-                                            }
-                                        }
-                                        tools
-                                    }
-                                    "PostToolUse" | "PostToolUseFailure" => {
-                                        let mut tools = existing.tools.clone();
-                                        if let Some(removing) = state.tools.first() {
-                                            // Skip if removing Agent tool - it's not in the list
-                                            if removing.name != "Agent" {
-                                                // Try exact match first (name + detail)
-                                                let pos = tools
-                                                    .iter()
-                                                    .position(|t| {
-                                                        t.name == removing.name
-                                                            && t.detail == removing.detail
-                                                    })
-                                                    // Fall back to name-only match
-                                                    .or_else(|| {
-                                                        tools
-                                                            .iter()
-                                                            .position(|t| t.name == removing.name)
-                                                    });
-                                                if let Some(pos) = pos {
-                                                    tools.remove(pos);
-                                                }
-                                            }
-                                        }
-                                        tools
-                                    }
-                                    _ => existing.tools.clone(),
-                                }
-                            } else {
-                                Vec::new()
-                            };
-                            let mut merged = state;
-                            merged.session_id = session_id;
-                            merged.tools = tools;
-                            if is_silent {
-                                // Silent mode: preserve visual state, only update tools
-                                merged.event_emoji = existing.event_emoji.clone();
-                                merged.hook_event_name = existing.hook_event_name.clone();
-                                merged.tool_name = existing.tool_name.clone();
-                                merged.tool_detail = existing.tool_detail.clone();
-                                merged.state = existing.state;
-                                merged.failure_detail = existing.failure_detail.clone();
-                            } else if event != "PostToolUseFailure" {
-                                // Non-failure events clear the failure detail
-                                merged.failure_detail = None;
-                            }
+                            let merged = state.merge_with(existing);
                             app.agent_states.insert(merged.tmux_pane.clone(), merged);
                         } else {
-                            // New agent — clear failure_detail for non-failure events
-                            if state.hook_event_name.as_deref() != Some("PostToolUseFailure") {
-                                let mut state = state;
-                                state.failure_detail = None;
-                                app.agent_states.insert(state.tmux_pane.clone(), state);
-                            } else {
-                                app.agent_states.insert(state.tmux_pane.clone(), state);
-                            }
+                            // New agent
+                            app.agent_states.insert(state.tmux_pane.clone(), state);
                         }
                     }
                     app.merge_agent_states();
@@ -1334,6 +1259,8 @@ async fn run_app(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Resul
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::agent::claude::ClaudeState;
+    use crate::agent::state::AgentData;
     use crate::tmux::types::{TmuxPane, TmuxSession, TmuxWindow};
 
     fn make_nvim_pane(pane_id: &str, title: &str) -> TmuxPane {
@@ -1646,22 +1573,27 @@ mod tests {
         let _ = std::fs::remove_file(crate::persist::agent_states_path());
 
         let mut app = App::new();
-        let state = AgentState {
-            tmux_pane: "%test_new".to_string(),
-            session_id: None,
-            agent_id: Some("sub_new_123".to_string()),
-            state: crate::agent::state::AgentStatus::Running,
-            updated_at: 100,
-            hook_event_name: Some("SubagentStart".to_string()),
-            event_emoji: None,
-            tool_name: Some("Task".to_string()),
-            tool_detail: None,
-            failure_detail: None,
-            tools: vec![crate::agent::state::ToolInfo {
-                name: "Task".to_string(),
-                detail: Some("Search codebase".to_string()),
-            }],
-        };
+        let state = AgentState::new(
+            "%test_new".to_string(),
+            AgentData::Claude(ClaudeState {
+                session_id: None,
+                agent_id: Some("sub_new_123".to_string()),
+                status: crate::agent::state::AgentStatus::Running,
+                hook_event_name: "SubagentStart".to_string(),
+                event_emoji: "🤖".to_string(),
+                tool_name: Some("Task".to_string()),
+                tool_detail: None,
+                active_tools: vec![crate::agent::state::ActiveTool {
+                    key: crate::agent::state::ToolKey::Claude {
+                        tool_use_id: "toolu_sub_new".to_string(),
+                    },
+                    name: "Task".to_string(),
+                    detail: Some("Search codebase".to_string()),
+                    failure_detail: None,
+                }],
+                failure_detail: None,
+            }),
+        );
 
         app.merge_subagent_state("%test_new".to_string(), "sub_new_123".to_string(), state);
 
@@ -1682,19 +1614,20 @@ mod tests {
         let mut app = App::new();
 
         // First add a running subagent
-        let running_state = AgentState {
-            tmux_pane: "%test_end".to_string(),
-            session_id: None,
-            agent_id: Some("sub_end_456".to_string()),
-            state: crate::agent::state::AgentStatus::Running,
-            updated_at: 100,
-            hook_event_name: None,
-            event_emoji: None,
-            tool_name: None,
-            tool_detail: None,
-            failure_detail: None,
-            tools: vec![],
-        };
+        let running_state = AgentState::new(
+            "%test_end".to_string(),
+            AgentData::Claude(ClaudeState {
+                session_id: None,
+                agent_id: Some("sub_end_456".to_string()),
+                status: crate::agent::state::AgentStatus::Running,
+                hook_event_name: "SubagentStart".to_string(),
+                event_emoji: "🤖".to_string(),
+                tool_name: None,
+                tool_detail: None,
+                active_tools: vec![],
+                failure_detail: None,
+            }),
+        );
         app.merge_subagent_state(
             "%test_end".to_string(),
             "sub_end_456".to_string(),
@@ -1702,19 +1635,20 @@ mod tests {
         );
 
         // Then end it
-        let ended_state = AgentState {
-            tmux_pane: "%test_end".to_string(),
-            session_id: None,
-            agent_id: Some("sub_end_456".to_string()),
-            state: crate::agent::state::AgentStatus::Ended,
-            updated_at: 200,
-            hook_event_name: Some("SubagentStop".to_string()),
-            event_emoji: None,
-            tool_name: None,
-            tool_detail: None,
-            failure_detail: None,
-            tools: vec![],
-        };
+        let ended_state = AgentState::new(
+            "%test_end".to_string(),
+            AgentData::Claude(ClaudeState {
+                session_id: None,
+                agent_id: Some("sub_end_456".to_string()),
+                status: crate::agent::state::AgentStatus::Ended,
+                hook_event_name: "SubagentStop".to_string(),
+                event_emoji: "🏁".to_string(),
+                tool_name: None,
+                tool_detail: None,
+                active_tools: vec![],
+                failure_detail: None,
+            }),
+        );
         app.merge_subagent_state(
             "%test_end".to_string(),
             "sub_end_456".to_string(),

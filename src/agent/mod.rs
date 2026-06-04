@@ -1,3 +1,5 @@
+pub mod claude;
+pub mod opencode_state;
 pub mod parser;
 pub mod state;
 pub mod subagent;

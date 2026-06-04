@@ -54,7 +54,7 @@ pub fn render(
         for window in &session.windows {
             for pane in &window.panes {
                 if let Some(ref agent) = pane.agent_state {
-                    match agent.state {
+                    match agent.status() {
                         AgentStatus::Running => running += 1,
                         AgentStatus::Waiting => waiting += 1,
                         AgentStatus::Permission => permission += 1,

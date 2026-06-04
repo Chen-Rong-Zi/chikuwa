@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 
-use super::state::{AgentStatus, ToolInfo};
+use super::state::{ActiveTool, AgentStatus};
 
 /// Status specific to subagents (extends AgentStatus with lifecycle info)
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -32,7 +32,7 @@ pub struct SubagentInfo {
     /// Current status
     pub state: SubagentStatus,
     /// Currently active tools
-    pub tools: Vec<ToolInfo>,
+    pub tools: Vec<ActiveTool>,
     /// Unix timestamp of last update
     pub updated_at: u64,
 }

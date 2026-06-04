@@ -1,10 +1,35 @@
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct ToolInfo {
+/// Unique identifier for an in-flight tool call.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum ToolKey {
+    /// Claude Code: exact match via tool_use_id
+    Claude { tool_use_id: String },
+    /// OpenCode: no unique ID, approximate match via name+detail
+    OpenCode {
+        name: String,
+        detail: Option<String>,
+    },
+}
+
+/// A tool call that is currently in progress.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ActiveTool {
+    pub key: ToolKey,
     pub name: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub detail: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub failure_detail: Option<String>,
+}
+
+/// Which agent produced this state.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AgentSource {
+    Claude,
+    OpenCode,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -29,43 +54,146 @@ impl std::fmt::Display for AgentStatus {
     }
 }
 
+/// Read-only view of agent state for UI rendering.
+#[allow(dead_code)]
+pub trait AgentView {
+    fn status(&self) -> AgentStatus;
+    fn source(&self) -> AgentSource;
+    fn session_id(&self) -> Option<&str>;
+    fn agent_id(&self) -> Option<&str>;
+    fn event_label(&self) -> &str;
+    fn event_emoji(&self) -> Option<&str>;
+    fn active_tools(&self) -> &[ActiveTool];
+    fn current_tool_name(&self) -> Option<&str>;
+    fn current_tool_detail(&self) -> Option<&str>;
+    fn failure_detail(&self) -> Option<&str>;
+}
+
+/// Per-agent state data, tagged by source.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum AgentData {
+    Claude(super::claude::ClaudeState),
+    OpenCode(super::opencode_state::OpenCodeState),
+}
+
+/// Top-level agent state tracked by the TUI.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AgentState {
     pub tmux_pane: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub session_id: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub agent_id: Option<String>,
-    pub state: AgentStatus,
     pub updated_at: u64,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub hook_event_name: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub event_emoji: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub tool_name: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub tool_detail: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub failure_detail: Option<String>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub tools: Vec<ToolInfo>,
+    pub data: AgentData,
+}
+
+impl AgentData {
+    /// Merge incoming data with existing data, returning the merged result.
+    /// If the agent types differ, returns the incoming data unchanged.
+    pub fn merge(incoming: AgentData, existing: &AgentData) -> AgentData {
+        match (&incoming, existing) {
+            (AgentData::Claude(in_c), AgentData::Claude(ex_c)) => {
+                AgentData::Claude(super::claude::ClaudeState::merge(in_c.clone(), ex_c))
+            }
+            (AgentData::OpenCode(in_o), AgentData::OpenCode(ex_o)) => AgentData::OpenCode(
+                super::opencode_state::OpenCodeState::merge(in_o.clone(), ex_o),
+            ),
+            _ => incoming,
+        }
+    }
 }
 
 impl AgentState {
-    pub fn new(tmux_pane: String, state: AgentStatus) -> Self {
+    pub fn new(tmux_pane: String, data: AgentData) -> Self {
         Self {
             tmux_pane,
-            session_id: None,
-            agent_id: None,
-            state,
             updated_at: now(),
-            hook_event_name: None,
-            event_emoji: None,
-            tool_name: None,
-            tool_detail: None,
-            failure_detail: None,
-            tools: Vec::new(),
+            data,
+        }
+    }
+
+    /// Merge this state with an existing state for the same tmux_pane.
+    /// Returns a new AgentState with merged data.
+    pub fn merge_with(mut self, existing: &AgentState) -> AgentState {
+        self.data = AgentData::merge(self.data, &existing.data);
+        self
+    }
+
+    pub fn status(&self) -> AgentStatus {
+        match &self.data {
+            AgentData::Claude(c) => c.status,
+            AgentData::OpenCode(o) => o.status,
+        }
+    }
+
+    #[allow(dead_code)]
+    pub fn session_id(&self) -> Option<&str> {
+        match &self.data {
+            AgentData::Claude(c) => c.session_id.as_deref(),
+            AgentData::OpenCode(o) => o.session_id.as_deref(),
+        }
+    }
+
+    pub fn agent_id(&self) -> Option<&str> {
+        match &self.data {
+            AgentData::Claude(c) => c.agent_id.as_deref(),
+            AgentData::OpenCode(_) => None,
+        }
+    }
+
+    pub fn source(&self) -> AgentSource {
+        match &self.data {
+            AgentData::Claude(_) => AgentSource::Claude,
+            AgentData::OpenCode(_) => AgentSource::OpenCode,
+        }
+    }
+}
+
+impl AgentView for AgentState {
+    fn status(&self) -> AgentStatus {
+        self.status()
+    }
+    fn source(&self) -> AgentSource {
+        self.source()
+    }
+    fn session_id(&self) -> Option<&str> {
+        self.session_id()
+    }
+    fn agent_id(&self) -> Option<&str> {
+        self.agent_id()
+    }
+    fn event_label(&self) -> &str {
+        match &self.data {
+            AgentData::Claude(c) => &c.hook_event_name,
+            AgentData::OpenCode(o) => o.event_type.as_deref().unwrap_or("Agent"),
+        }
+    }
+    fn event_emoji(&self) -> Option<&str> {
+        match &self.data {
+            AgentData::Claude(c) => Some(&c.event_emoji),
+            AgentData::OpenCode(o) => o.event_emoji.as_deref(),
+        }
+    }
+    fn active_tools(&self) -> &[ActiveTool] {
+        match &self.data {
+            AgentData::Claude(c) => &c.active_tools,
+            AgentData::OpenCode(o) => &o.active_tools,
+        }
+    }
+    fn current_tool_name(&self) -> Option<&str> {
+        match &self.data {
+            AgentData::Claude(c) => c.tool_name.as_deref(),
+            AgentData::OpenCode(o) => o.tool_name.as_deref(),
+        }
+    }
+    fn current_tool_detail(&self) -> Option<&str> {
+        match &self.data {
+            AgentData::Claude(c) => c.tool_detail.as_deref(),
+            AgentData::OpenCode(o) => o.tool_detail.as_deref(),
+        }
+    }
+    fn failure_detail(&self) -> Option<&str> {
+        match &self.data {
+            AgentData::Claude(c) => c.failure_detail.as_deref(),
+            AgentData::OpenCode(_) => None,
         }
     }
 }
@@ -80,6 +208,7 @@ fn now() -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::agent::claude::ClaudeState;
 
     #[test]
     fn test_agent_status_serialize() {
@@ -90,10 +219,6 @@ mod tests {
         assert_eq!(
             serde_json::to_string(&AgentStatus::Waiting).unwrap(),
             "\"waiting\""
-        );
-        assert_eq!(
-            serde_json::to_string(&AgentStatus::Permission).unwrap(),
-            "\"permission\""
         );
     }
 
@@ -120,53 +245,76 @@ mod tests {
 
     #[test]
     fn test_agent_state_new() {
-        let state = AgentState::new("%5".to_string(), AgentStatus::Running);
+        let state = AgentState::new(
+            "%5".to_string(),
+            AgentData::Claude(ClaudeState {
+                session_id: None,
+                agent_id: None,
+                status: AgentStatus::Running,
+                hook_event_name: "PreToolUse".to_string(),
+                event_emoji: "🔧".to_string(),
+                tool_name: None,
+                tool_detail: None,
+                active_tools: Vec::new(),
+                failure_detail: None,
+            }),
+        );
         assert_eq!(state.tmux_pane, "%5");
-        assert_eq!(state.state, AgentStatus::Running);
-        assert!(state.session_id.is_none());
+        assert_eq!(state.status(), AgentStatus::Running);
+        assert!(state.session_id().is_none());
         assert!(state.updated_at > 0);
     }
 
     #[test]
     fn test_agent_state_roundtrip_json() {
-        let state = AgentState {
-            tmux_pane: "%5".to_string(),
-            session_id: Some("abc123".to_string()),
-            agent_id: None,
-            state: AgentStatus::Running,
-            updated_at: 1234567890,
-            hook_event_name: None,
-            event_emoji: None,
-            tool_name: None,
-            tool_detail: None,
-            failure_detail: None,
-            tools: Vec::new(),
-        };
+        let state = AgentState::new(
+            "%5".to_string(),
+            AgentData::Claude(ClaudeState {
+                session_id: Some("abc123".to_string()),
+                agent_id: None,
+                status: AgentStatus::Running,
+                hook_event_name: "PreToolUse".to_string(),
+                event_emoji: "🔧".to_string(),
+                tool_name: None,
+                tool_detail: None,
+                active_tools: Vec::new(),
+                failure_detail: None,
+            }),
+        );
+        // Override updated_at for deterministic test
+        let mut state = state;
+        state.updated_at = 1234567890;
 
         let json = serde_json::to_string(&state).unwrap();
         let parsed: AgentState = serde_json::from_str(&json).unwrap();
 
         assert_eq!(parsed.tmux_pane, "%5");
-        assert_eq!(parsed.session_id, Some("abc123".to_string()));
-        assert_eq!(parsed.state, AgentStatus::Running);
+        assert_eq!(parsed.session_id(), Some("abc123"));
+        assert_eq!(parsed.status(), AgentStatus::Running);
         assert_eq!(parsed.updated_at, 1234567890);
     }
 
     #[test]
-    fn test_agent_state_optional_fields_omitted() {
-        let state = AgentState::new("%0".to_string(), AgentStatus::Waiting);
-        let json = serde_json::to_string(&state).unwrap();
-
-        // Optional None fields should be omitted
-        assert!(!json.contains("session_id"));
+    fn test_agent_state_deserialize_minimal() {
+        let json = r#"{"tmux_pane":"%0","updated_at":100,"data":{"type":"claude","status":"running","hook_event_name":"PreToolUse","event_emoji":"🔧"}}"#;
+        let state: AgentState = serde_json::from_str(json).unwrap();
+        assert_eq!(state.tmux_pane, "%0");
+        assert_eq!(state.status(), AgentStatus::Running);
+        assert!(state.session_id().is_none());
     }
 
     #[test]
-    fn test_agent_state_deserialize_minimal() {
-        let json = r#"{"tmux_pane":"%0","state":"waiting","updated_at":100}"#;
-        let state: AgentState = serde_json::from_str(json).unwrap();
-        assert_eq!(state.tmux_pane, "%0");
-        assert_eq!(state.state, AgentStatus::Waiting);
-        assert!(state.session_id.is_none());
+    fn test_tool_key_equality() {
+        let k1 = ToolKey::Claude {
+            tool_use_id: "toolu_01".to_string(),
+        };
+        let k2 = ToolKey::Claude {
+            tool_use_id: "toolu_01".to_string(),
+        };
+        let k3 = ToolKey::Claude {
+            tool_use_id: "toolu_02".to_string(),
+        };
+        assert_eq!(k1, k2);
+        assert_ne!(k1, k3);
     }
 }

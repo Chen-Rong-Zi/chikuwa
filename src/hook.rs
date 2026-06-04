@@ -3,6 +3,7 @@ use std::io::Read;
 use anyhow::{Context, Result};
 
 use crate::agent::parser::DisplayMode;
+use crate::agent::state::AgentView;
 use crate::agent::{ClaudeHookParser, HookParser};
 use crate::ipc;
 
@@ -26,8 +27,8 @@ pub async fn run() -> Result<()> {
     // Debug: log all events
     eprintln!(
         "[chikuwa hook] event: {} agent_id: {:?}",
-        result.state.hook_event_name.as_deref().unwrap_or("?"),
-        result.state.agent_id
+        result.state.event_label(),
+        result.state.agent_id()
     );
 
     ipc::broadcast_state(&result.state).await?;

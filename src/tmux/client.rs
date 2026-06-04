@@ -216,7 +216,8 @@ pub async fn unregister_hooks() {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::agent::state::{AgentState, AgentStatus};
+    use crate::agent::claude::ClaudeState;
+    use crate::agent::state::{AgentData, AgentState, AgentStatus};
 
     #[test]
     fn test_build_tree_single_session_single_window() {
@@ -278,26 +279,27 @@ mod tests {
         let mut agents = HashMap::new();
         agents.insert(
             "%0".to_string(),
-            AgentState {
-                tmux_pane: "%0".to_string(),
-                session_id: Some("sess1".to_string()),
-                agent_id: None,
-                state: AgentStatus::Running,
-                updated_at: 100,
-                hook_event_name: None,
-                event_emoji: None,
-                tool_name: None,
-                tool_detail: None,
-                failure_detail: None,
-                tools: Vec::new(),
-            },
+            AgentState::new(
+                "%0".to_string(),
+                AgentData::Claude(ClaudeState {
+                    session_id: Some("sess1".to_string()),
+                    agent_id: None,
+                    status: AgentStatus::Running,
+                    hook_event_name: "PreToolUse".to_string(),
+                    event_emoji: "🔧".to_string(),
+                    tool_name: None,
+                    tool_detail: None,
+                    active_tools: Vec::new(),
+                    failure_detail: None,
+                }),
+            ),
         );
 
         let tree = build_tree(raw, &agents);
         let pane = &tree[0].windows[0].panes[0];
         assert!(pane.agent_state.is_some());
         assert_eq!(
-            pane.agent_state.as_ref().unwrap().state,
+            pane.agent_state.as_ref().unwrap().status(),
             AgentStatus::Running
         );
         assert_eq!(pane.pane_current_path, "/project");

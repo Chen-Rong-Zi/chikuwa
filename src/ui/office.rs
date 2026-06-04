@@ -5,7 +5,7 @@ use ratatui::widgets::Paragraph;
 use ratatui::Frame;
 use unicode_width::UnicodeWidthStr;
 
-use crate::agent::state::{AgentState, AgentStatus};
+use crate::agent::state::{AgentState, AgentStatus, AgentView};
 use crate::agent::{SubagentInfo, SubagentStatus};
 use crate::tmux::types::TmuxSession;
 use crate::ui::theme;
@@ -176,7 +176,7 @@ fn build_office_lines(
 
     for (idx, entry) in entries.iter().enumerate() {
         let is_selected = idx == selected;
-        let is_permission = entry.agent_state.state == AgentStatus::Permission;
+        let is_permission = entry.agent_state.status() == AgentStatus::Permission;
 
         // Main agent room
         let room_lines = render_agent_room(
@@ -206,7 +206,7 @@ fn build_office_lines(
     let mut permission = 0u32;
     let mut ended = 0u32;
     for entry in entries {
-        match entry.agent_state.state {
+        match entry.agent_state.status() {
             AgentStatus::Started | AgentStatus::Running => running += 1,
             AgentStatus::Waiting => waiting += 1,
             AgentStatus::Permission => permission += 1,
@@ -261,7 +261,7 @@ fn render_agent_room(
         None
     };
 
-    let status_label = match agent.state {
+    let status_label = match agent.status() {
         AgentStatus::Started => "starting",
         AgentStatus::Running => "running",
         AgentStatus::Waiting => "waiting",
@@ -269,7 +269,7 @@ fn render_agent_room(
         AgentStatus::Ended => "ended",
     };
 
-    let status_emoji = agent.event_emoji.as_deref().unwrap_or(match agent.state {
+    let status_emoji = agent.event_emoji().unwrap_or(match agent.status() {
         AgentStatus::Started => "🚀",
         AgentStatus::Running => "🔧",
         AgentStatus::Waiting => "💤",
@@ -286,7 +286,7 @@ fn render_agent_room(
     let mut lines = Vec::new();
 
     // Room top border: ┌── 🤖 Agent Name ──── Status ──┐
-    let name_text = format!("🤖 {}", agent.hook_event_name.as_deref().unwrap_or("Agent"));
+    let name_text = format!("🤖 {}", agent.event_label());
     let status_text = format!("{} {}", status_emoji, status_label);
     let name_width = name_text.width();
     let status_width = status_text.width();
@@ -305,16 +305,16 @@ fn render_agent_room(
     lines.push(Line::from(border_spans));
 
     // Room content: activity description + tools
-    let icon = theme::status_icon(&agent.state, anim_frame);
+    let icon = theme::status_icon(&agent.status(), anim_frame);
 
     // Activity line
-    let activity = if let Some(ref tool_name) = agent.tool_name {
-        if let Some(ref detail) = agent.tool_detail {
+    let activity = if let Some(tool_name) = agent.current_tool_name() {
+        if let Some(detail) = agent.current_tool_detail() {
             format!("{} {}: {}", theme::ICON_TOOL, tool_name, detail)
         } else {
             format!("{} {}", theme::ICON_TOOL, tool_name)
         }
-    } else if let Some(ref emoji) = agent.event_emoji {
+    } else if let Some(emoji) = agent.event_emoji() {
         emoji.to_string()
     } else {
         "idle".to_string()
@@ -324,7 +324,7 @@ fn render_agent_room(
         Span::styled("│ ".to_string(), border_style),
         Span::styled(
             format!(" {} ", icon),
-            theme::status_style(&agent.state, true),
+            theme::status_style(&agent.status(), true),
         ),
         Span::styled(format!(" {}", activity), dim_style),
     ];
@@ -339,10 +339,11 @@ fn render_agent_room(
     lines.push(Line::from(activity_spans));
 
     // Tool lines (up to 3)
-    let visible_tools: Vec<_> = if agent.tools.len() > 3 {
-        agent.tools[agent.tools.len() - 3..].iter().collect()
+    let active_tools = agent.active_tools();
+    let visible_tools: Vec<_> = if active_tools.len() > 3 {
+        active_tools[active_tools.len() - 3..].iter().collect()
     } else {
-        agent.tools.iter().collect()
+        active_tools.iter().collect()
     };
     for tool in &visible_tools {
         let tool_text = match &tool.detail {
@@ -365,7 +366,7 @@ fn render_agent_room(
     }
 
     // Failure detail line (red)
-    if let Some(ref failure) = agent.failure_detail {
+    if let Some(failure) = agent.failure_detail() {
         let failure_style = Style::default().fg(theme::COLOR_FAILURE);
         let mut failure_spans = vec![
             Span::styled("│ ".to_string(), border_style),
@@ -387,10 +388,10 @@ fn render_agent_room(
 
     // Duration + summary line
     let duration = format_duration(agent.updated_at);
-    let tool_count = if agent.tools.is_empty() {
+    let tool_count = if active_tools.is_empty() {
         String::new()
     } else {
-        format!("  📋 {} tools", agent.tools.len())
+        format!("  📋 {} tools", active_tools.len())
     };
     let sub_count = if !subagents.is_empty() {
         format!("  🤖 {} sub", subagents.len())
@@ -497,30 +498,33 @@ fn apply_bg(spans: &mut Vec<Span<'static>>, permission_bg: Option<Color>, is_sel
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::agent::state::{AgentStatus, ToolInfo};
+    use crate::agent::claude::ClaudeState;
+    use crate::agent::state::{ActiveTool, AgentData, AgentStatus, ToolKey};
     use crate::tmux::types::{TmuxPane, TmuxSession, TmuxWindow};
     use std::collections::HashMap;
 
     fn make_agent_state(pane_id: &str, status: AgentStatus) -> AgentState {
-        AgentState {
-            tmux_pane: pane_id.to_string(),
-            session_id: None,
-            agent_id: None,
-            state: status,
-            updated_at: std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_secs(),
-            hook_event_name: Some("PreToolUse".to_string()),
-            event_emoji: Some("🔧".to_string()),
-            tool_name: Some("Read".to_string()),
-            tool_detail: Some("src/main.rs".to_string()),
-            failure_detail: None,
-            tools: vec![ToolInfo {
-                name: "Read".to_string(),
-                detail: Some("src/main.rs".to_string()),
-            }],
-        }
+        AgentState::new(
+            pane_id.to_string(),
+            AgentData::Claude(ClaudeState {
+                session_id: None,
+                agent_id: None,
+                status,
+                hook_event_name: "PreToolUse".to_string(),
+                event_emoji: "🔧".to_string(),
+                tool_name: Some("Read".to_string()),
+                tool_detail: Some("src/main.rs".to_string()),
+                active_tools: vec![ActiveTool {
+                    key: ToolKey::Claude {
+                        tool_use_id: "toolu_test".to_string(),
+                    },
+                    name: "Read".to_string(),
+                    detail: Some("src/main.rs".to_string()),
+                    failure_detail: None,
+                }],
+                failure_detail: None,
+            }),
+        )
     }
 
     fn make_session(panes: Vec<TmuxPane>) -> TmuxSession {
@@ -564,7 +568,7 @@ mod tests {
         let sessions = vec![make_session(vec![make_pane("%0", Some(state))])];
         let entries = collect_agent_entries(&sessions, &HashMap::new());
         assert_eq!(entries.len(), 1);
-        assert_eq!(entries[0].agent_state.state, AgentStatus::Running);
+        assert_eq!(entries[0].agent_state.status(), AgentStatus::Running);
         assert_eq!(entries[0].tmux_target, "main:0.0");
     }
 
@@ -626,7 +630,9 @@ mod tests {
     #[test]
     fn test_build_office_lines_permission_highlight() {
         let mut state = make_agent_state("%0", AgentStatus::Permission);
-        state.event_emoji = Some("🔐".to_string());
+        if let AgentData::Claude(ref mut c) = state.data {
+            c.event_emoji = "🔐".to_string();
+        }
         let entries = vec![AgentEntry {
             pane_id: "%0".to_string(),
             tmux_target: "main:0.0".to_string(),
