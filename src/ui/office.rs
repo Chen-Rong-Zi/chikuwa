@@ -206,22 +206,17 @@ fn build_office_lines(
         let is_selected = idx == selected;
         let is_permission = entry.agent_state.status() == AgentStatus::Permission;
 
-        // Main agent room
+        // Main agent room (includes subagent lines)
         let room_lines = render_agent_room(
             &entry.agent_state,
+            &entry.subagents,
+            entry.completed_count,
             content_width,
             is_selected,
             is_permission,
             anim_frame,
         );
         lines.extend(room_lines);
-
-        // Subagent cards below the main room
-        if !entry.subagents.is_empty() {
-            lines.push(Line::from(""));
-            let card_lines = render_subagent_cards(&entry.subagents, content_width, anim_frame);
-            lines.extend(card_lines);
-        }
 
         // Separator between entries
         if idx < entries.len() - 1 {
@@ -270,179 +265,10 @@ fn build_office_lines(
     lines
 }
 
-fn render_subagent_cards(
-    subagents: &[SubagentInfo],
-    content_width: usize,
-    _anim_frame: usize,
-) -> Vec<Line<'static>> {
-    if subagents.is_empty() {
-        return Vec::new();
-    }
-
-    let dim_style = Style::default().fg(theme::COLOR_DIM);
-    let border_style = Style::default().fg(theme::COLOR_PURPLE);
-    let white_border = Style::default().fg(theme::COLOR_WHITE);
-    let permission_style = Style::default()
-        .fg(theme::COLOR_LIGHT_PURPLE)
-        .bg(theme::COLOR_PERMISSION_BG);
-
-    struct CardLayout {
-        name: String,
-        status: String,
-        activity: String,
-        info: String,
-        inner_width: usize,
-        is_permission: bool,
-    }
-
-    let cards: Vec<CardLayout> = subagents
-        .iter()
-        .map(|sub| {
-            let name = format!("🤖 {}", sub.short_id);
-            let is_permission = matches!(sub.state, SubagentStatus::Waiting);
-
-            let (status_emoji, status_label) = match sub.state {
-                SubagentStatus::Running => ("🔧", "Running"),
-                SubagentStatus::Waiting => ("💤", "Waiting"),
-                SubagentStatus::Ended => ("✅", "Done"),
-            };
-            let status = format!("{} {}", status_emoji, status_label);
-
-            let duration = format_duration(sub.updated_at);
-            let tool_count = sub.tools.len();
-
-            let (activity, info) = match sub.state {
-                SubagentStatus::Running => {
-                    let act = sub
-                        .tools
-                        .first()
-                        .map(|t| match &t.detail {
-                            Some(d) => format!("{} {}", t.name, d),
-                            None => t.name.clone(),
-                        })
-                        .unwrap_or_default();
-                    let inf = format!("⏱️ {}", duration);
-                    (act, inf)
-                }
-                SubagentStatus::Waiting => {
-                    ("🔐 Permission".to_string(), "⚠️ Needs you!".to_string())
-                }
-                SubagentStatus::Ended => {
-                    let act = format!("{} ago", duration);
-                    let inf = if tool_count > 0 {
-                        format!("📋 {} tools", tool_count)
-                    } else {
-                        format!("⏱️ {}", duration)
-                    };
-                    (act, inf)
-                }
-            };
-
-            let max_content_width = [
-                name.as_str(),
-                status.as_str(),
-                activity.as_str(),
-                info.as_str(),
-            ]
-            .iter()
-            .map(|s| s.width())
-            .max()
-            .unwrap_or(0)
-            .max(12);
-            let inner_width = (max_content_width + 2).min(30);
-
-            CardLayout {
-                name,
-                status,
-                activity,
-                info,
-                inner_width,
-                is_permission,
-            }
-        })
-        .collect();
-
-    if cards.is_empty() {
-        return Vec::new();
-    }
-
-    let mut result = Vec::new();
-    let mut idx = 0;
-
-    while idx < cards.len() {
-        let mut row_cards = vec![idx];
-        let mut used = cards[idx].inner_width + 2;
-        let mut j = idx + 1;
-        while j < cards.len() {
-            let card_total = cards[j].inner_width + 2;
-            if used + 1 + card_total <= content_width {
-                used += 1 + card_total;
-                row_cards.push(j);
-                j += 1;
-            } else {
-                break;
-            }
-        }
-
-        for line_kind in 0..6 {
-            let mut spans: Vec<Span<'static>> = Vec::new();
-            for (ri, &ci) in row_cards.iter().enumerate() {
-                if ri > 0 {
-                    spans.push(Span::raw(" "));
-                }
-                let card = &cards[ci];
-                let bstyle = if card.is_permission {
-                    white_border
-                } else {
-                    border_style
-                };
-
-                match line_kind {
-                    0 => {
-                        spans.push(Span::styled("┌", bstyle));
-                        spans.push(Span::styled("─".repeat(card.inner_width), bstyle));
-                        spans.push(Span::styled("┐", bstyle));
-                    }
-                    5 => {
-                        spans.push(Span::styled("└", bstyle));
-                        spans.push(Span::styled("─".repeat(card.inner_width), bstyle));
-                        spans.push(Span::styled("┘", bstyle));
-                    }
-                    n @ 1..=4 => {
-                        let content = match (n - 1) as usize {
-                            0 => &card.name,
-                            1 => &card.status,
-                            2 => &card.activity,
-                            3 => &card.info,
-                            _ => unreachable!(),
-                        };
-                        let text = format!(
-                            "{}{:<width$}{}",
-                            "│",
-                            content,
-                            "│",
-                            width = card.inner_width
-                        );
-                        if card.is_permission {
-                            spans.push(Span::styled(text, permission_style));
-                        } else {
-                            spans.push(Span::styled(text, dim_style));
-                        }
-                    }
-                    _ => unreachable!(),
-                }
-            }
-            result.push(Line::from(spans));
-        }
-
-        idx = j;
-    }
-
-    result
-}
-
 fn render_agent_room(
     agent: &AgentState,
+    subagents: &[SubagentInfo],
+    completed_count: u32,
     content_width: usize,
     is_selected: bool,
     is_permission: bool,
@@ -473,151 +299,203 @@ fn render_agent_room(
     let elapsed = elapsed_secs(agent.updated_at);
     let face = theme::agent_face_emoji(&agent.status(), has_failure, anim_frame, elapsed);
 
-    // Event emoji for title bar right side
-    let right_emoji = if agent.status() == AgentStatus::Permission {
-        // Permission uses ✋/🙋 from face emoji, no separate event emoji
-        ""
-    } else if let Some(tool_name) = agent.current_tool_name() {
-        theme::tool_spinner(anim_frame)
-    } else {
-        agent
+    // Right indicator for title bar
+    let right_indicator = match agent.status() {
+        AgentStatus::Running => theme::tool_spinner(anim_frame).to_string(),
+        AgentStatus::Permission => String::new(),
+        AgentStatus::Waiting => "💤".repeat(theme::idle_zzz_count(elapsed)),
+        _ => agent
             .event_emoji()
             .unwrap_or_else(|| theme::event_emoji(agent.event_label()))
+            .to_string(),
     };
 
     let mut lines = Vec::new();
 
-    // Title bar: ┌── face ──── right_emoji ──┐
+    // Title bar: ┌─ face ──── right_indicator ──┐
     let face_width = face.width();
-    let right_width = right_emoji.width();
+    let right_width = right_indicator.width();
     let inner_width = content_width.saturating_sub(2); // ┌ and ┐
-    let fill_len = inner_width.saturating_sub(face_width + right_width + 4); // 2 spaces + 2 ──
+    let fill_len = if right_indicator.is_empty() {
+        inner_width.saturating_sub(face_width + 2) // ┌─ face ──┐
+    } else {
+        inner_width.saturating_sub(face_width + right_width + 4) // ┌─ face ──── right ──┐
+    };
     let fill = "─".repeat(fill_len);
 
     let mut border_spans = vec![
         Span::styled("┌─ ".to_string(), border_style),
         Span::styled(face.to_string(), name_style),
-        Span::styled(format!(" ── {} ", fill), border_style),
     ];
-    if !right_emoji.is_empty() {
-        border_spans.push(Span::styled(right_emoji.to_string(), dim_style));
-        border_spans.push(Span::styled(" ─┐".to_string(), border_style));
+    if right_indicator.is_empty() {
+        border_spans.push(Span::styled(format!(" {}┐", fill), border_style));
     } else {
-        border_spans.push(Span::styled("──┐".to_string(), border_style));
+        border_spans.push(Span::styled(format!(" {} ", fill), border_style));
+        border_spans.push(Span::styled(right_indicator, dim_style));
+        border_spans.push(Span::styled(" ─┐".to_string(), border_style));
     }
     apply_bg(&mut border_spans, bg_color, is_selected);
     lines.push(Line::from(border_spans));
 
     // Empty line after title
-    lines.push(make_empty_line(
-        content_width,
-        border_style,
-        bg_color,
-        is_selected,
-    ));
+    lines.push(make_empty_line(content_width, border_style, bg_color, is_selected));
 
-    // Tool lines (up to 3, each with animated emoji + truncated detail)
+    // Tool lines (all with ◐ spinner)
     let active_tools = agent.active_tools();
-    let visible_count = active_tools.len().min(3);
-    let overflow = active_tools.len().saturating_sub(3);
-    // Show the most recent 3 tools
-    let start_idx = active_tools.len().saturating_sub(3);
-    for (i, tool) in active_tools[start_idx..start_idx + visible_count]
-        .iter()
-        .enumerate()
-    {
-        let emoji = theme::tool_spinner(anim_frame + i);
+    for (i, tool) in active_tools.iter().enumerate() {
+        let spinner = theme::tool_spinner(anim_frame + i);
         let detail = tool.detail.as_deref().unwrap_or("");
-        let tool_text = format!("{} {}", emoji, detail);
-        let tool_text = truncate_to_width(&tool_text, content_width.saturating_sub(4)); // │ + space + text + space + │
+        let tool_text = format!("{} {}", spinner, detail);
+        let tool_text = truncate_to_width(&tool_text, content_width.saturating_sub(4));
         let mut tool_spans = vec![
             Span::styled("│ ".to_string(), border_style),
             Span::styled(format!(" {}", tool_text), dim_style),
         ];
         let used: usize = tool_spans.iter().map(|s| s.content.width()).sum();
         let pad = content_width.saturating_sub(used + 1);
-        tool_spans.push(Span::styled(
-            " ".repeat(pad),
-            Style::default().fg(Color::Reset),
-        ));
+        tool_spans.push(Span::styled(" ".repeat(pad), Style::default().fg(Color::Reset)));
         tool_spans.push(Span::styled("│".to_string(), border_style));
         apply_bg(&mut tool_spans, bg_color, is_selected);
         lines.push(Line::from(tool_spans));
     }
-    if overflow > 0 {
-        let overflow_text = format!("  +{} more", overflow);
-        let mut overflow_spans = vec![
-            Span::styled("│ ".to_string(), border_style),
-            Span::styled(overflow_text, dim_style),
-        ];
-        let used: usize = overflow_spans.iter().map(|s| s.content.width()).sum();
-        let pad = content_width.saturating_sub(used + 1);
-        overflow_spans.push(Span::styled(
-            " ".repeat(pad),
-            Style::default().fg(Color::Reset),
-        ));
-        overflow_spans.push(Span::styled("│".to_string(), border_style));
-        apply_bg(&mut overflow_spans, bg_color, is_selected);
-        lines.push(Line::from(overflow_spans));
+
+    // Empty line before subagents (if any subagents or completed count)
+    if !subagents.is_empty() || completed_count > 0 {
+        lines.push(make_empty_line(content_width, border_style, bg_color, is_selected));
     }
 
-    // Permission notice
+    // Subagent lines
+    for (si, sub) in subagents.iter().enumerate() {
+        let sub_elapsed = elapsed_secs(sub.updated_at);
+        let sub_status = match sub.state {
+            SubagentStatus::Running => AgentStatus::Running,
+            SubagentStatus::Waiting => AgentStatus::Permission,
+            SubagentStatus::Ended => AgentStatus::Ended,
+        };
+        let sub_face = theme::agent_face_emoji(&sub_status, false, anim_frame + si, sub_elapsed);
+        let duration = format_duration(sub.updated_at);
+
+        if sub.tools.is_empty() {
+            // No tools: │ 👶 face    duration │
+            let text = format!("👶 {}  {}", sub_face, duration);
+            let text = truncate_to_width(&text, content_width.saturating_sub(4));
+            let mut spans = vec![
+                Span::styled("│ ".to_string(), border_style),
+                Span::styled(format!(" {}", text), dim_style),
+            ];
+            let used: usize = spans.iter().map(|s| s.content.width()).sum();
+            let pad = content_width.saturating_sub(used + 1);
+            spans.push(Span::styled(" ".repeat(pad), Style::default().fg(Color::Reset)));
+            spans.push(Span::styled("│".to_string(), border_style));
+            apply_bg(&mut spans, bg_color, is_selected);
+            lines.push(Line::from(spans));
+        } else {
+            // First tool: │ 👶 face spinner detail  duration │
+            let first_tool = &sub.tools[0];
+            let spinner = theme::tool_spinner(anim_frame + si);
+            let detail = first_tool.detail.as_deref().unwrap_or("");
+            let text = format!("👶 {} {} {}", sub_face, spinner, detail);
+            let dur_text = format!("  {}", duration);
+            let max_detail_width = content_width
+                .saturating_sub(4)
+                .saturating_sub(dur_text.width());
+            let text = truncate_to_width(&text, max_detail_width);
+            let mut spans = vec![
+                Span::styled("│ ".to_string(), border_style),
+                Span::styled(format!(" {}", text), dim_style),
+            ];
+            // Right-align duration
+            let used: usize = spans.iter().map(|s| s.content.width()).sum();
+            let pad = content_width.saturating_sub(used + dur_text.width() + 1);
+            spans.push(Span::styled(" ".repeat(pad), Style::default().fg(Color::Reset)));
+            spans.push(Span::styled(dur_text, dim_style));
+            spans.push(Span::styled("│".to_string(), border_style));
+            apply_bg(&mut spans, bg_color, is_selected);
+            lines.push(Line::from(spans));
+
+            // Subsequent tools: │    spinner detail │
+            for (ti, tool) in sub.tools[1..].iter().enumerate() {
+                let spinner = theme::tool_spinner(anim_frame + si + ti + 1);
+                let detail = tool.detail.as_deref().unwrap_or("");
+                let text = format!("   {} {}", spinner, detail);
+                let text = truncate_to_width(&text, content_width.saturating_sub(4));
+                let mut spans = vec![
+                    Span::styled("│".to_string(), border_style),
+                    Span::styled(format!(" {}", text), dim_style),
+                ];
+                let used: usize = spans.iter().map(|s| s.content.width()).sum();
+                let pad = content_width.saturating_sub(used + 1);
+                spans.push(Span::styled(" ".repeat(pad), Style::default().fg(Color::Reset)));
+                spans.push(Span::styled("│".to_string(), border_style));
+                apply_bg(&mut spans, bg_color, is_selected);
+                lines.push(Line::from(spans));
+            }
+        }
+    }
+
+    // Completed subagent count
+    if completed_count > 0 {
+        let text = format!("✓ {} completed", completed_count);
+        let mut spans = vec![
+            Span::styled("│ ".to_string(), border_style),
+            Span::styled(format!(" {}", text), dim_style),
+        ];
+        let used: usize = spans.iter().map(|s| s.content.width()).sum();
+        let pad = content_width.saturating_sub(used + 1);
+        spans.push(Span::styled(" ".repeat(pad), Style::default().fg(Color::Reset)));
+        spans.push(Span::styled("│".to_string(), border_style));
+        apply_bg(&mut spans, bg_color, is_selected);
+        lines.push(Line::from(spans));
+    }
+
+    // Permission warning text
     if agent.status() == AgentStatus::Permission {
-        let notice = "needs input! ⚠️";
-        let mut notice_spans = vec![
+        let warning = theme::permission_warning_text(elapsed);
+        let mut spans = vec![
             Span::styled("│ ".to_string(), border_style),
-            Span::styled(format!(" {}", notice), name_style),
+            Span::styled(format!(" {}", warning), name_style),
         ];
-        let used: usize = notice_spans.iter().map(|s| s.content.width()).sum();
+        let used: usize = spans.iter().map(|s| s.content.width()).sum();
         let pad = content_width.saturating_sub(used + 1);
-        notice_spans.push(Span::styled(
-            " ".repeat(pad),
-            Style::default().fg(Color::Reset),
-        ));
-        notice_spans.push(Span::styled("│".to_string(), border_style));
-        apply_bg(&mut notice_spans, bg_color, is_selected);
-        lines.push(Line::from(notice_spans));
+        spans.push(Span::styled(" ".repeat(pad), Style::default().fg(Color::Reset)));
+        spans.push(Span::styled("│".to_string(), border_style));
+        apply_bg(&mut spans, bg_color, is_selected);
+        lines.push(Line::from(spans));
     }
 
-    // Failure detail line (red)
+    // Failure detail line
     if let Some(failure) = agent.failure_detail() {
         let failure_style = Style::default().fg(theme::COLOR_FAILURE);
-        let mut failure_spans = vec![
+        let mut spans = vec![
             Span::styled("│ ".to_string(), border_style),
             Span::styled(format!(" 💥 {}", failure), failure_style),
         ];
-        let used: usize = failure_spans.iter().map(|s| s.content.width()).sum();
+        let used: usize = spans.iter().map(|s| s.content.width()).sum();
         let pad = content_width.saturating_sub(used + 1);
-        failure_spans.push(Span::styled(
-            " ".repeat(pad),
-            Style::default().fg(Color::Reset),
-        ));
-        failure_spans.push(Span::styled("│".to_string(), border_style));
-        apply_bg(&mut failure_spans, bg_color, is_selected);
-        lines.push(Line::from(failure_spans));
+        spans.push(Span::styled(" ".repeat(pad), Style::default().fg(Color::Reset)));
+        spans.push(Span::styled("│".to_string(), border_style));
+        apply_bg(&mut spans, bg_color, is_selected);
+        lines.push(Line::from(spans));
     }
 
     // Empty line before duration
-    lines.push(make_empty_line(
-        content_width,
-        border_style,
-        bg_color,
-        is_selected,
-    ));
+    lines.push(make_empty_line(content_width, border_style, bg_color, is_selected));
 
-    // Duration line
+    // Duration line with contextual label
+    let label = theme::duration_label(&agent.status());
     let duration = format_duration(agent.updated_at);
-    let info = format!("⏱️ {}", duration);
+    let info = if label.is_empty() {
+        format!("⏱️ {}", duration)
+    } else {
+        format!("⏱️ {}: {}", label, duration)
+    };
     let mut info_spans = vec![
         Span::styled("│ ".to_string(), border_style),
         Span::styled(format!(" {}", info), dim_style),
     ];
     let used: usize = info_spans.iter().map(|s| s.content.width()).sum();
     let pad = content_width.saturating_sub(used + 1);
-    info_spans.push(Span::styled(
-        " ".repeat(pad),
-        Style::default().fg(Color::Reset),
-    ));
+    info_spans.push(Span::styled(" ".repeat(pad), Style::default().fg(Color::Reset)));
     info_spans.push(Span::styled("│".to_string(), border_style));
     apply_bg(&mut info_spans, bg_color, is_selected);
     lines.push(Line::from(info_spans));
