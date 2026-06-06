@@ -91,7 +91,7 @@ pub async fn start_listener(path: &Path, tx: mpsc::Sender<AppEvent>) -> Result<(
                     // Use try_send to avoid blocking if channel is full
                     let _ = tx.try_send(AppEvent::TmuxChanged);
                 } else if let Ok(state) = serde_json::from_str::<AgentState>(&line) {
-                    let _ = tx.try_send(AppEvent::AgentStateUpdate(state));
+                    let _ = tx.try_send(AppEvent::AgentStateUpdate(Box::new(state)));
                 }
             }
             drop(permit);
@@ -115,9 +115,13 @@ pub fn cleanup_instance_socket(pid: u32) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::Mutex;
+
+    static ENV_LOCK: Mutex<()> = Mutex::new(());
 
     #[test]
     fn test_socket_dir_with_xdg() {
+        let _guard = ENV_LOCK.lock().unwrap();
         std::env::set_var("XDG_RUNTIME_DIR", "/run/user/1000");
         let dir = socket_dir();
         assert_eq!(dir, PathBuf::from("/run/user/1000/chikuwa"));
@@ -126,6 +130,7 @@ mod tests {
 
     #[test]
     fn test_socket_dir_fallback() {
+        let _guard = ENV_LOCK.lock().unwrap();
         std::env::remove_var("XDG_RUNTIME_DIR");
         let dir = socket_dir();
         assert_eq!(dir, PathBuf::from("/tmp/chikuwa"));
@@ -133,6 +138,7 @@ mod tests {
 
     #[test]
     fn test_instance_socket_path() {
+        let _guard = ENV_LOCK.lock().unwrap();
         std::env::set_var("XDG_RUNTIME_DIR", "/run/user/1000");
         let path = instance_socket_path(12345);
         assert_eq!(path, PathBuf::from("/run/user/1000/chikuwa/12345.sock"));

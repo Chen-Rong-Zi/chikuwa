@@ -2,6 +2,7 @@ use anyhow::{Context, Result};
 use serde::Deserialize;
 
 use super::claude::ClaudeState;
+use super::codex_state::CodexState;
 use super::opencode_state::OpenCodeState;
 use super::state::{ActiveTool, AgentData, AgentState, AgentStatus, ToolKey};
 
@@ -478,9 +479,193 @@ impl HookParser for OpenCodeHookParser {
     }
 }
 
+// ─── Codex CLI Hook Parser ──────────────────────────────────────────
+
+/// Input JSON from Codex CLI hooks (stdin).
+#[derive(Debug, Deserialize)]
+struct CodexHookInput {
+    #[serde(default)]
+    hook_event_name: String,
+    #[serde(default)]
+    session_id: Option<String>,
+    #[serde(default)]
+    transcript_path: Option<String>,
+    #[serde(default)]
+    cwd: Option<String>,
+    #[serde(default)]
+    model: Option<String>,
+    #[serde(default)]
+    turn_id: Option<String>,
+    #[serde(default)]
+    permission_mode: Option<String>,
+    #[serde(default)]
+    tool_name: Option<String>,
+    #[serde(default)]
+    tool_use_id: Option<String>,
+    #[serde(default)]
+    tool_input: Option<serde_json::Value>,
+    #[serde(default)]
+    #[allow(dead_code)]
+    tool_response: Option<serde_json::Value>,
+    #[serde(default)]
+    agent_id: Option<String>,
+    #[serde(default)]
+    agent_type: Option<String>,
+    #[serde(default)]
+    agent_transcript_path: Option<String>,
+    #[serde(default)]
+    #[allow(dead_code)]
+    stop_hook_active: Option<bool>,
+    #[serde(default)]
+    #[allow(dead_code)]
+    last_assistant_message: Option<String>,
+    #[serde(default)]
+    #[allow(dead_code)]
+    prompt: Option<String>,
+    #[serde(default)]
+    #[allow(dead_code)]
+    trigger: Option<String>,
+    #[serde(default)]
+    #[allow(dead_code)]
+    source: Option<String>,
+}
+
+fn codex_event_mapping(event: &str) -> Option<EventMapping> {
+    match event {
+        "SessionStart" => Some(EventMapping {
+            status: AgentStatus::Started,
+            emoji: "🚀",
+        }),
+        "SubagentStart" => Some(EventMapping {
+            status: AgentStatus::Running,
+            emoji: "🤖",
+        }),
+        "PreToolUse" => Some(EventMapping {
+            status: AgentStatus::Running,
+            emoji: "🔧",
+        }),
+        "PermissionRequest" => Some(EventMapping {
+            status: AgentStatus::Permission,
+            emoji: "🔐",
+        }),
+        "PostToolUse" => Some(EventMapping {
+            status: AgentStatus::Running,
+            emoji: "✅",
+        }),
+        "PreCompact" => Some(EventMapping {
+            status: AgentStatus::Running,
+            emoji: "🗜️",
+        }),
+        "PostCompact" => Some(EventMapping {
+            status: AgentStatus::Running,
+            emoji: "📦",
+        }),
+        "UserPromptSubmit" => Some(EventMapping {
+            status: AgentStatus::Running,
+            emoji: "💭",
+        }),
+        "SubagentStop" => Some(EventMapping {
+            status: AgentStatus::Ended,
+            emoji: "🏁",
+        }),
+        "Stop" => Some(EventMapping {
+            status: AgentStatus::Waiting,
+            emoji: "💤",
+        }),
+        _ => None,
+    }
+}
+
+fn extract_codex_tool_detail(tool_name: &str, input: &serde_json::Value) -> Option<String> {
+    match tool_name {
+        "Bash" | "apply_patch" => input
+            .get("command")
+            .and_then(|value| value.as_str())
+            .map(|value| value.to_string()),
+        _ if tool_name.starts_with("mcp__") => {
+            let short_name = tool_name.rsplit("__").next().unwrap_or(tool_name);
+            for key in ["file_path", "path", "command", "pattern", "query", "url"] {
+                if let Some(value) = input.get(key).and_then(|value| value.as_str()) {
+                    return Some(format!("{short_name}({value})"));
+                }
+            }
+            Some(short_name.to_string())
+        }
+        _ => None,
+    }
+}
+
+pub struct CodexHookParser;
+
+impl HookParser for CodexHookParser {
+    fn parse(&self, pane_id: String, raw_json: &str) -> Result<ParseResult> {
+        let input: CodexHookInput = serde_json::from_str(raw_json.trim())
+            .context("Failed to parse Codex CLI hook input JSON from stdin")?;
+
+        let event_name = input.hook_event_name.clone();
+        let Some(mapping) = codex_event_mapping(&event_name) else {
+            return Ok(ParseResult {
+                state: AgentState::new(
+                    pane_id,
+                    AgentData::Codex(CodexState::new(&event_name, AgentStatus::Waiting, "💤")),
+                ),
+                display: DisplayMode::Suppress,
+            });
+        };
+
+        let tool_name = input.tool_name.clone();
+        let tool_detail = tool_name.as_ref().and_then(|name| {
+            input
+                .tool_input
+                .as_ref()
+                .and_then(|tool_input| extract_codex_tool_detail(name, tool_input))
+        });
+
+        let active_tools = match (
+            event_name.as_str(),
+            tool_name.as_ref(),
+            input.tool_use_id.as_ref(),
+        ) {
+            ("PreToolUse" | "PostToolUse", Some(name), Some(tool_use_id)) => vec![ActiveTool {
+                key: ToolKey::Codex {
+                    tool_use_id: tool_use_id.clone(),
+                },
+                name: name.clone(),
+                detail: tool_detail.clone(),
+                failure_detail: None,
+            }],
+            _ => Vec::new(),
+        };
+
+        let state = CodexState {
+            session_id: input.session_id,
+            agent_id: input.agent_id,
+            status: mapping.status,
+            hook_event_name: event_name,
+            event_emoji: mapping.emoji.to_string(),
+            tool_name,
+            tool_detail,
+            active_tools,
+            failure_detail: None,
+            turn_id: input.turn_id,
+            permission_mode: input.permission_mode,
+            model: input.model,
+            cwd: input.cwd,
+            agent_type: input.agent_type,
+            transcript_path: input.agent_transcript_path.or(input.transcript_path),
+        };
+
+        Ok(ParseResult {
+            state: AgentState::new(pane_id, AgentData::Codex(state)),
+            display: DisplayMode::Show,
+        })
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::agent::state::AgentView;
 
     fn claude_data(result: &ParseResult) -> &ClaudeState {
         match &result.state.data {
@@ -494,6 +679,13 @@ mod tests {
             AgentData::OpenCode(o) => o,
             _ => panic!("expected OpenCode data"),
         }
+    }
+
+    fn codex_input(event: &str) -> String {
+        format!(
+            r#"{{"hook_event_name":"{}","session_id":"sess-1","cwd":"/repo","turn_id":"turn-1","model":"o3","transcript_path":"/tmp/transcript.jsonl"}}"#,
+            event
+        )
     }
 
     #[test]
@@ -781,5 +973,140 @@ mod tests {
     fn test_extract_tool_detail_unknown() {
         let input = serde_json::json!({"foo": "bar"});
         assert_eq!(extract_tool_detail("UnknownTool", &input), None);
+    }
+
+    #[test]
+    fn test_codex_hook_session_start() {
+        let parser = CodexHookParser;
+        let result = parser
+            .parse("%0".to_string(), &codex_input("SessionStart"))
+            .unwrap();
+
+        assert_eq!(result.display, DisplayMode::Show);
+        assert_eq!(result.state.status(), AgentStatus::Started);
+        assert_eq!(
+            result.state.source(),
+            crate::agent::state::AgentSource::Codex
+        );
+        assert_eq!(result.state.event_emoji(), Some("🚀"));
+    }
+
+    #[test]
+    fn test_codex_hook_pre_tool_use_bash() {
+        let json = r#"{"hook_event_name":"PreToolUse","session_id":"sess-1","turn_id":"turn-1","tool_name":"Bash","tool_use_id":"call-1","tool_input":{"command":"ls -la"}}"#;
+        let parser = CodexHookParser;
+        let result = parser.parse("%0".to_string(), json).unwrap();
+
+        assert_eq!(result.state.status(), AgentStatus::Running);
+        assert_eq!(result.state.current_tool_name(), Some("Bash"));
+        assert_eq!(result.state.current_tool_detail(), Some("ls -la"));
+        assert_eq!(result.state.active_tools().len(), 1);
+    }
+
+    #[test]
+    fn test_codex_hook_post_tool_use_contains_removal_tool() {
+        let json = r#"{"hook_event_name":"PostToolUse","session_id":"sess-1","turn_id":"turn-1","tool_name":"Bash","tool_use_id":"call-1","tool_input":{"command":"ls -la"},"tool_response":{"exit_code":0}}"#;
+        let parser = CodexHookParser;
+        let result = parser.parse("%0".to_string(), json).unwrap();
+
+        assert_eq!(result.state.status(), AgentStatus::Running);
+        assert_eq!(result.state.active_tools().len(), 1);
+        assert_eq!(
+            result.state.active_tools()[0].key,
+            ToolKey::Codex {
+                tool_use_id: "call-1".to_string()
+            }
+        );
+    }
+
+    #[test]
+    fn test_codex_hook_permission_request() {
+        let json = r#"{"hook_event_name":"PermissionRequest","session_id":"sess-1","turn_id":"turn-1","tool_name":"Bash","tool_input":{"command":"rm -rf /","description":"Delete everything"}}"#;
+        let parser = CodexHookParser;
+        let result = parser.parse("%0".to_string(), json).unwrap();
+
+        assert_eq!(result.state.status(), AgentStatus::Permission);
+        assert_eq!(result.state.event_emoji(), Some("🔐"));
+        assert_eq!(result.state.current_tool_detail(), Some("rm -rf /"));
+    }
+
+    #[test]
+    fn test_codex_hook_subagent_start_and_stop() {
+        let start = r#"{"hook_event_name":"SubagentStart","session_id":"sess-1","turn_id":"turn-1","agent_id":"agent-1","agent_type":"code-review"}"#;
+        let stop = r#"{"hook_event_name":"SubagentStop","session_id":"sess-1","turn_id":"turn-1","agent_id":"agent-1","agent_type":"code-review","agent_transcript_path":"/tmp/agent.jsonl"}"#;
+        let parser = CodexHookParser;
+
+        let start_result = parser.parse("%0".to_string(), start).unwrap();
+        let stop_result = parser.parse("%0".to_string(), stop).unwrap();
+
+        assert_eq!(start_result.state.agent_id(), Some("agent-1"));
+        assert_eq!(start_result.state.status(), AgentStatus::Running);
+        assert_eq!(stop_result.state.agent_id(), Some("agent-1"));
+        assert_eq!(stop_result.state.status(), AgentStatus::Ended);
+    }
+
+    #[test]
+    fn test_codex_hook_stop() {
+        let json = r#"{"hook_event_name":"Stop","session_id":"sess-1","turn_id":"turn-1","stop_hook_active":false,"last_assistant_message":"Done"}"#;
+        let parser = CodexHookParser;
+        let result = parser.parse("%0".to_string(), json).unwrap();
+
+        assert_eq!(result.state.status(), AgentStatus::Waiting);
+        assert_eq!(result.state.event_emoji(), Some("💤"));
+    }
+
+    #[test]
+    fn test_codex_hook_unknown_event_suppressed() {
+        let parser = CodexHookParser;
+        let result = parser
+            .parse("%0".to_string(), &codex_input("UnknownEvent"))
+            .unwrap();
+
+        assert_eq!(result.display, DisplayMode::Suppress);
+    }
+
+    #[test]
+    fn test_codex_hook_all_events_have_mapping() {
+        let events = [
+            "SessionStart",
+            "SubagentStart",
+            "PreToolUse",
+            "PermissionRequest",
+            "PostToolUse",
+            "PreCompact",
+            "PostCompact",
+            "UserPromptSubmit",
+            "SubagentStop",
+            "Stop",
+        ];
+        let parser = CodexHookParser;
+
+        for event in events {
+            let result = parser.parse("%0".to_string(), &codex_input(event)).unwrap();
+            assert_eq!(
+                result.display,
+                DisplayMode::Show,
+                "{event} should be displayed"
+            );
+        }
+    }
+
+    #[test]
+    fn test_extract_codex_tool_detail_apply_patch() {
+        let input = serde_json::json!({"command": "apply patch content"});
+
+        assert_eq!(
+            extract_codex_tool_detail("apply_patch", &input),
+            Some("apply patch content".to_string())
+        );
+    }
+
+    #[test]
+    fn test_extract_codex_tool_detail_mcp_path() {
+        let input = serde_json::json!({"file_path": "/tmp/test.txt"});
+        let detail = extract_codex_tool_detail("mcp__fs__read", &input).unwrap();
+
+        assert!(detail.contains("read"));
+        assert!(detail.contains("/tmp/test.txt"));
     }
 }

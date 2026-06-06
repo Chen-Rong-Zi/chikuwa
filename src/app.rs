@@ -716,6 +716,40 @@ impl App {
     }
 }
 
+fn is_subagent_state(state: &AgentState) -> bool {
+    state.agent_id().is_some()
+        && matches!(
+            state.source(),
+            crate::agent::state::AgentSource::Claude | crate::agent::state::AgentSource::Codex
+        )
+}
+
+fn apply_key_action(app: &mut App, action: Action) -> bool {
+    match action {
+        Action::Quit => {
+            app.should_quit = true;
+            return true;
+        }
+        Action::Up => app.move_up(),
+        Action::Down => app.move_down(),
+        Action::Top => app.move_top(),
+        Action::Bottom => app.move_bottom(),
+        Action::ToggleCollapse => app.toggle_current_session(),
+        Action::ToggleView => {
+            app.view_mode = match app.view_mode {
+                ViewMode::Tree => ViewMode::Office,
+                ViewMode::Office => ViewMode::Tree,
+            };
+            app.selected = 0;
+            app.scroll_offset = 0;
+            app.user_navigated = true;
+        }
+        Action::Select | Action::None => {}
+    }
+
+    false
+}
+
 /// Run the TUI application.
 pub async fn run() -> Result<()> {
     // Setup terminal
@@ -1124,24 +1158,10 @@ async fn run_app(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Resul
             match evt {
                 AppEvent::Key(key) => {
                     let action = event::handle_key(key);
-                    match action {
-                        Action::Quit => app.should_quit = true,
-                        Action::Up => app.move_up(),
-                        Action::Down => app.move_down(),
-                        Action::Select => app.handle_select().await?,
-                        Action::Top => app.move_top(),
-                        Action::Bottom => app.move_bottom(),
-                        Action::ToggleCollapse => app.toggle_current_session(),
-                        Action::ToggleView => {
-                            app.view_mode = match app.view_mode {
-                                ViewMode::Tree => ViewMode::Office,
-                                ViewMode::Office => ViewMode::Tree,
-                            };
-                            app.selected = 0;
-                            app.scroll_offset = 0;
-                            app.user_navigated = true;
-                        }
-                        Action::None => {}
+                    if action == Action::Select {
+                        app.handle_select().await?;
+                    } else if apply_key_action(&mut app, action) {
+                        break;
                     }
                 }
                 AppEvent::Mouse(mouse) => {
@@ -1207,10 +1227,9 @@ async fn run_app(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Resul
                         Some(std::time::Instant::now() + Duration::from_secs(next_secs));
                 }
                 AppEvent::AgentStateUpdate(state) => {
+                    let state = *state;
                     // Determine if this is a subagent event (Claude with agent_id)
-                    if state.agent_id().is_some()
-                        && state.source() == crate::agent::state::AgentSource::Claude
-                    {
+                    if is_subagent_state(&state) {
                         // Subagent event
                         let pane_id = state.tmux_pane.clone();
                         let agent_id = state.agent_id().unwrap().to_string();
@@ -1296,6 +1315,40 @@ mod tests {
             toplevel: None,
             worktree_name: None,
         }
+    }
+
+    #[test]
+    fn test_codex_agent_id_routes_as_subagent() {
+        let state = AgentState::new(
+            "%1".to_string(),
+            AgentData::Codex(crate::agent::codex_state::CodexState {
+                session_id: Some("sess-1".to_string()),
+                agent_id: Some("agent-1".to_string()),
+                status: crate::agent::state::AgentStatus::Running,
+                hook_event_name: "SubagentStart".to_string(),
+                event_emoji: "🤖".to_string(),
+                tool_name: None,
+                tool_detail: None,
+                active_tools: Vec::new(),
+                failure_detail: None,
+                turn_id: Some("turn-1".to_string()),
+                permission_mode: None,
+                model: None,
+                cwd: None,
+                agent_type: Some("code-review".to_string()),
+                transcript_path: None,
+            }),
+        );
+
+        assert!(is_subagent_state(&state));
+    }
+
+    #[test]
+    fn quit_action_requests_main_loop_exit() {
+        let mut app = App::new();
+
+        assert!(apply_key_action(&mut app, Action::Quit));
+        assert!(app.should_quit);
     }
 
     #[test]

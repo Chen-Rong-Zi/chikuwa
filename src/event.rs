@@ -10,7 +10,7 @@ pub enum AppEvent {
     Mouse(MouseEvent),
     Tick,
     AnimationTick,
-    AgentStateUpdate(AgentState),
+    AgentStateUpdate(Box<AgentState>),
     TmuxChanged,
     /// Usage data fetched successfully. Second field is seconds until next fetch.
     UsageUpdate(Usage, u64),

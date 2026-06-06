@@ -33,16 +33,18 @@ A sidebar TUI for monitoring multiple AI agents (Claude Code, etc.) running in t
 
 ## How It Works
 
-A single binary that operates in three modes:
+A single binary that operates in four modes:
 
 | Mode | Command | Description |
 |---|---|---|
 | TUI | `chikuwa` | Displays tmux sessions/windows/panes as a tree with real-time agent status |
 | Hook | `chikuwa hook` | Called from Claude Code hooks; reads event JSON from stdin to update agent status via IPC |
+| Codex Hook | `chikuwa codex-hook` | Called from Codex CLI hooks; reads event JSON from stdin to update agent status via IPC |
 | Notify | `chikuwa notify` | Called from tmux hooks; signals the TUI to refresh immediately |
 
 ```
 Claude Code ──(hooks)──→ chikuwa hook ──(IPC)──→ chikuwa (TUI)
+Codex CLI ──(hooks)──→ chikuwa codex-hook ──(IPC)──→ chikuwa (TUI)
 tmux ──(hooks)──→ chikuwa notify ──(IPC)──→ chikuwa (TUI)
 tmux ──(list-panes -a, polling)────────────←── chikuwa (TUI)
 git ──(branch, gh pr)──────────────────────←── chikuwa (TUI)
@@ -131,6 +133,67 @@ Add the following to `~/.claude/settings.json`:
 ```
 
 The hook reads `hook_event_name`, `tool_name`, and `tool_input` from stdin JSON to determine agent status and active tools.
+
+### Codex CLI Hooks Setup
+
+Configure Codex CLI hooks in `~/.codex/hooks.json`:
+
+```json
+{
+  "hooks": {
+    "SessionStart": [{
+      "matcher": "startup|resume|clear|compact",
+      "hooks": [{"type": "command", "command": "chikuwa codex-hook"}]
+    }],
+    "SubagentStart": [{
+      "matcher": ".*",
+      "hooks": [{"type": "command", "command": "chikuwa codex-hook"}]
+    }],
+    "PreToolUse": [{
+      "matcher": ".*",
+      "hooks": [{"type": "command", "command": "chikuwa codex-hook"}]
+    }],
+    "PermissionRequest": [{
+      "matcher": ".*",
+      "hooks": [{"type": "command", "command": "chikuwa codex-hook"}]
+    }],
+    "PostToolUse": [{
+      "matcher": ".*",
+      "hooks": [{"type": "command", "command": "chikuwa codex-hook"}]
+    }],
+    "PreCompact": [{
+      "matcher": "manual|auto",
+      "hooks": [{"type": "command", "command": "chikuwa codex-hook"}]
+    }],
+    "PostCompact": [{
+      "matcher": "manual|auto",
+      "hooks": [{"type": "command", "command": "chikuwa codex-hook"}]
+    }],
+    "UserPromptSubmit": [{
+      "hooks": [{"type": "command", "command": "chikuwa codex-hook"}]
+    }],
+    "SubagentStop": [{
+      "matcher": ".*",
+      "hooks": [{"type": "command", "command": "chikuwa codex-hook"}]
+    }],
+    "Stop": [{
+      "hooks": [{"type": "command", "command": "chikuwa codex-hook"}]
+    }]
+  }
+}
+```
+
+Codex requires non-managed command hooks to be reviewed and trusted before they run. Use `/hooks` inside Codex CLI to review and trust the configured chikuwa hook commands.
+
+Codex events map to agent status:
+
+| Codex Event | AgentStatus |
+|---|---|
+| `SessionStart` | `Started` |
+| `SubagentStart`, `PreToolUse`, `PostToolUse`, `PreCompact`, `PostCompact`, `UserPromptSubmit` | `Running` |
+| `PermissionRequest` | `Permission` |
+| `SubagentStop` | `Ended` |
+| `Stop` | `Waiting` |
 
 ### tmux Hooks Setup
 

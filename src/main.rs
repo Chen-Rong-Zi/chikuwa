@@ -1,5 +1,6 @@
 mod agent;
 mod app;
+mod codex_hook;
 mod event;
 mod git;
 mod hook;
@@ -25,6 +26,8 @@ enum Commands {
     Hook,
     /// OpenCode hook mode: update agent state from OpenCode hooks (reads event from stdin JSON)
     OpencodeHook,
+    /// Codex hook mode: update agent state from Codex CLI hooks (reads event from stdin JSON)
+    CodexHook,
     /// Notify the TUI of a tmux change (used by tmux hooks)
     Notify,
 }
@@ -39,6 +42,9 @@ async fn main() -> anyhow::Result<()> {
         }
         Some(Commands::OpencodeHook) => {
             opencode::run().await?;
+        }
+        Some(Commands::CodexHook) => {
+            codex_hook::run().await?;
         }
         Some(Commands::Notify) => {
             ipc::broadcast_notify().await?;

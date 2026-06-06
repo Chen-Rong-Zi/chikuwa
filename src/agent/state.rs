@@ -6,6 +6,8 @@ use serde::{Deserialize, Serialize};
 pub enum ToolKey {
     /// Claude Code: exact match via tool_use_id
     Claude { tool_use_id: String },
+    /// Codex CLI: exact match via tool_use_id
+    Codex { tool_use_id: String },
     /// OpenCode: no unique ID, approximate match via name+detail
     OpenCode {
         name: String,
@@ -30,6 +32,7 @@ pub struct ActiveTool {
 pub enum AgentSource {
     Claude,
     OpenCode,
+    Codex,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -75,6 +78,7 @@ pub trait AgentView {
 pub enum AgentData {
     Claude(super::claude::ClaudeState),
     OpenCode(super::opencode_state::OpenCodeState),
+    Codex(super::codex_state::CodexState),
 }
 
 /// Top-level agent state tracked by the TUI.
@@ -96,6 +100,9 @@ impl AgentData {
             (AgentData::OpenCode(in_o), AgentData::OpenCode(ex_o)) => AgentData::OpenCode(
                 super::opencode_state::OpenCodeState::merge(in_o.clone(), ex_o),
             ),
+            (AgentData::Codex(in_c), AgentData::Codex(ex_c)) => {
+                AgentData::Codex(super::codex_state::CodexState::merge(in_c.clone(), ex_c))
+            }
             _ => incoming,
         }
     }
@@ -121,6 +128,7 @@ impl AgentState {
         match &self.data {
             AgentData::Claude(c) => c.status,
             AgentData::OpenCode(o) => o.status,
+            AgentData::Codex(c) => c.status,
         }
     }
 
@@ -129,6 +137,7 @@ impl AgentState {
         match &self.data {
             AgentData::Claude(c) => c.session_id.as_deref(),
             AgentData::OpenCode(o) => o.session_id.as_deref(),
+            AgentData::Codex(c) => c.session_id.as_deref(),
         }
     }
 
@@ -136,6 +145,7 @@ impl AgentState {
         match &self.data {
             AgentData::Claude(c) => c.agent_id.as_deref(),
             AgentData::OpenCode(_) => None,
+            AgentData::Codex(c) => c.agent_id.as_deref(),
         }
     }
 
@@ -143,6 +153,7 @@ impl AgentState {
         match &self.data {
             AgentData::Claude(_) => AgentSource::Claude,
             AgentData::OpenCode(_) => AgentSource::OpenCode,
+            AgentData::Codex(_) => AgentSource::Codex,
         }
     }
 }
@@ -164,36 +175,42 @@ impl AgentView for AgentState {
         match &self.data {
             AgentData::Claude(c) => &c.hook_event_name,
             AgentData::OpenCode(o) => o.event_type.as_deref().unwrap_or("Agent"),
+            AgentData::Codex(c) => &c.hook_event_name,
         }
     }
     fn event_emoji(&self) -> Option<&str> {
         match &self.data {
             AgentData::Claude(c) => Some(&c.event_emoji),
             AgentData::OpenCode(o) => o.event_emoji.as_deref(),
+            AgentData::Codex(c) => Some(&c.event_emoji),
         }
     }
     fn active_tools(&self) -> &[ActiveTool] {
         match &self.data {
             AgentData::Claude(c) => &c.active_tools,
             AgentData::OpenCode(o) => &o.active_tools,
+            AgentData::Codex(c) => &c.active_tools,
         }
     }
     fn current_tool_name(&self) -> Option<&str> {
         match &self.data {
             AgentData::Claude(c) => c.tool_name.as_deref(),
             AgentData::OpenCode(o) => o.tool_name.as_deref(),
+            AgentData::Codex(c) => c.tool_name.as_deref(),
         }
     }
     fn current_tool_detail(&self) -> Option<&str> {
         match &self.data {
             AgentData::Claude(c) => c.tool_detail.as_deref(),
             AgentData::OpenCode(o) => o.tool_detail.as_deref(),
+            AgentData::Codex(c) => c.tool_detail.as_deref(),
         }
     }
     fn failure_detail(&self) -> Option<&str> {
         match &self.data {
             AgentData::Claude(c) => c.failure_detail.as_deref(),
             AgentData::OpenCode(_) => None,
+            AgentData::Codex(c) => c.failure_detail.as_deref(),
         }
     }
 }
@@ -304,6 +321,27 @@ mod tests {
     }
 
     #[test]
+    fn test_codex_agent_state_roundtrip_json() {
+        let state = AgentState::new(
+            "%1".to_string(),
+            AgentData::Codex(crate::agent::codex_state::CodexState::new(
+                "SessionStart",
+                AgentStatus::Started,
+                "🚀",
+            )),
+        );
+
+        let json = serde_json::to_string(&state).unwrap();
+        let deserialized: AgentState = serde_json::from_str(&json).unwrap();
+
+        assert_eq!(deserialized.tmux_pane, "%1");
+        assert_eq!(deserialized.status(), AgentStatus::Started);
+        assert_eq!(deserialized.source(), AgentSource::Codex);
+        assert_eq!(deserialized.event_label(), "SessionStart");
+        assert_eq!(deserialized.event_emoji(), Some("🚀"));
+    }
+
+    #[test]
     fn test_tool_key_equality() {
         let k1 = ToolKey::Claude {
             tool_use_id: "toolu_01".to_string(),
@@ -316,5 +354,16 @@ mod tests {
         };
         assert_eq!(k1, k2);
         assert_ne!(k1, k3);
+    }
+
+    #[test]
+    fn test_codex_tool_key_serializes() {
+        let key = ToolKey::Codex {
+            tool_use_id: "call-123".to_string(),
+        };
+
+        let json = serde_json::to_string(&key).unwrap();
+
+        assert_eq!(json, r#"{"type":"codex","tool_use_id":"call-123"}"#);
     }
 }
