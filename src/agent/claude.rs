@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 
-use super::state::{ActiveTool, AgentStatus};
+use super::state::{push_recent_tool, ActiveTool, AgentStatus};
 
 /// Full state from Claude Code hooks.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -20,6 +20,9 @@ pub struct ClaudeState {
     /// All active (in-flight) tool calls
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub active_tools: Vec<ActiveTool>,
+    /// Recently completed tool calls, oldest to newest
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub recent_tools: Vec<ActiveTool>,
     /// Failure message from PostToolUseFailure
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub failure_detail: Option<String>,
@@ -36,6 +39,8 @@ impl ClaudeState {
             .session_id
             .clone()
             .or_else(|| existing.session_id.clone());
+
+        let mut recent_tools = existing.recent_tools.clone();
 
         // Merge active tools
         let active_tools =
@@ -62,7 +67,11 @@ impl ClaudeState {
                                     },
                                 );
                                 if let Some(pos) = pos {
-                                    tools.remove(pos);
+                                    let mut completed = tools.remove(pos);
+                                    if event == "PostToolUseFailure" {
+                                        completed.failure_detail = incoming.failure_detail.clone();
+                                    }
+                                    push_recent_tool(&mut recent_tools, completed);
                                 }
                             }
                         }
@@ -71,12 +80,14 @@ impl ClaudeState {
                     _ => existing.active_tools.clone(),
                 }
             } else {
+                recent_tools.clear();
                 Vec::new()
             };
 
         let mut merged = incoming;
         merged.session_id = session_id;
         merged.active_tools = active_tools;
+        merged.recent_tools = recent_tools;
 
         if is_silent {
             // Silent: preserve visual state, only update tools
@@ -109,6 +120,7 @@ mod tests {
             tool_name: None,
             tool_detail: None,
             active_tools: Vec::new(),
+            recent_tools: Vec::new(),
             failure_detail: None,
         }
     }
@@ -147,6 +159,8 @@ mod tests {
         let merged = ClaudeState::merge(incoming, &existing);
         assert_eq!(merged.active_tools.len(), 1);
         assert_eq!(merged.active_tools[0].name, "Read");
+        assert_eq!(merged.recent_tools.len(), 1);
+        assert_eq!(merged.recent_tools[0].name, "Bash");
     }
 
     #[test]
@@ -168,6 +182,8 @@ mod tests {
         assert_eq!(merged.tool_detail, Some("cargo test".to_string()));
         // But tool is removed from active list
         assert!(merged.active_tools.is_empty());
+        assert_eq!(merged.recent_tools.len(), 1);
+        assert_eq!(merged.recent_tools[0].name, "Bash");
     }
 
     #[test]
@@ -182,6 +198,11 @@ mod tests {
         let merged = ClaudeState::merge(incoming, &existing);
         assert_eq!(merged.failure_detail, Some("command not found".to_string()));
         assert!(merged.active_tools.is_empty());
+        assert_eq!(merged.recent_tools.len(), 1);
+        assert_eq!(
+            merged.recent_tools[0].failure_detail.as_deref(),
+            Some("command not found")
+        );
     }
 
     #[test]
@@ -216,6 +237,7 @@ mod tests {
 
         let merged = ClaudeState::merge(incoming, &existing);
         assert!(merged.active_tools.is_empty());
+        assert!(merged.recent_tools.is_empty());
     }
 
     #[test]

@@ -23,7 +23,7 @@ A sidebar TUI for monitoring multiple AI agents (Claude Code, etc.) running in t
 ## Features
 
 - **Real-time agent monitoring** — See all running Claude Code agents across tmux sessions with animated status spinners
-- **Active tool display** — Shows what each agent is currently doing (e.g., `Bash: cargo test`, `Read: src/main.rs`), including multiple concurrent tools
+- **Tool activity display** — Shows each agent's recent completed tools plus currently running tools, with active calls kept at the bottom
 - **Instant tmux updates** — Registers tmux hooks for immediate response to pane/window/session changes, with periodic polling as a fallback
 - **Git integration** — Displays current branch, repo name, and open PR info per session
 - **Nvim integration** — Shows the file being edited in nvim panes with relative paths

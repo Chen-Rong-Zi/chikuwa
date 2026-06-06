@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 
-use super::state::{ActiveTool, AgentStatus};
+use super::state::{push_recent_tool, ActiveTool, AgentStatus};
 
 /// Full state from OpenCode hooks/plugin.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -18,6 +18,9 @@ pub struct OpenCodeState {
     pub tool_detail: Option<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub active_tools: Vec<ActiveTool>,
+    /// Recently completed tool calls, oldest to newest
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub recent_tools: Vec<ActiveTool>,
     #[serde(default)]
     pub is_busy: bool,
 }
@@ -32,6 +35,8 @@ impl OpenCodeState {
             .session_id
             .clone()
             .or_else(|| existing.session_id.clone());
+
+        let mut recent_tools = existing.recent_tools.clone();
 
         // Merge active tools
         let active_tools = match event {
@@ -49,18 +54,24 @@ impl OpenCodeState {
                 if let Some(removing) = incoming.active_tools.first() {
                     let pos = tools.iter().position(|t| t.key == removing.key);
                     if let Some(pos) = pos {
-                        tools.remove(pos);
+                        let completed = tools.remove(pos);
+                        push_recent_tool(&mut recent_tools, completed);
                     }
                 }
                 tools
             }
-            "session.idle" | "session.deleted" => Vec::new(),
+            "session.idle" => Vec::new(),
+            "session.deleted" => {
+                recent_tools.clear();
+                Vec::new()
+            }
             _ => existing.active_tools.clone(),
         };
 
         let mut merged = incoming;
         merged.session_id = session_id;
         merged.active_tools = active_tools;
+        merged.recent_tools = recent_tools;
         merged
     }
 }
@@ -79,6 +90,7 @@ mod tests {
             tool_name: None,
             tool_detail: None,
             active_tools: Vec::new(),
+            recent_tools: Vec::new(),
             is_busy: false,
         }
     }
@@ -142,6 +154,8 @@ mod tests {
         let merged = OpenCodeState::merge(incoming, &existing);
         assert_eq!(merged.active_tools.len(), 1);
         assert_eq!(merged.active_tools[0].name, "read");
+        assert_eq!(merged.recent_tools.len(), 1);
+        assert_eq!(merged.recent_tools[0].name, "bash");
     }
 
     #[test]
@@ -158,6 +172,8 @@ mod tests {
 
         let merged = OpenCodeState::merge(incoming, &existing);
         assert!(merged.active_tools.is_empty());
+        assert_eq!(merged.recent_tools.len(), 1);
+        assert_eq!(merged.recent_tools[0].name, "bash");
     }
 
     #[test]

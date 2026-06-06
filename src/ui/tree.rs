@@ -7,6 +7,8 @@ use ratatui::widgets::Paragraph;
 use ratatui::Frame;
 use unicode_width::UnicodeWidthStr;
 
+use crate::agent::detect::detect_agent_source;
+use crate::agent::state::ActiveTool;
 use crate::agent::state::{AgentState, AgentStatus, AgentView};
 use crate::agent::{SubagentInfo, SubagentStatus};
 use crate::git::GitInfo;
@@ -319,24 +321,13 @@ fn git_info_visual_rows(item: &TreeItem, width: u16) -> usize {
 /// Check if the command is Claude Code.
 #[allow(dead_code)]
 fn is_claude_command(command: &str) -> bool {
-    command == "claude"
+    crate::agent::detect::is_claude_command(command)
 }
 
 /// Check if this is an agent process (Claude Code or OpenCode).
 /// Claude Code shows as "claude", OpenCode shows as "node" with window name containing "opencode".
 fn is_agent_command(command: &str, window_name: Option<&str>) -> bool {
-    if command == "claude" {
-        return true;
-    }
-    // OpenCode runs as node but has "opencode" in window name
-    if command == "node" {
-        if let Some(wn) = window_name {
-            if wn.to_lowercase().contains("opencode") {
-                return true;
-            }
-        }
-    }
-    false
+    detect_agent_source(command, window_name, None).is_some()
 }
 
 /// Extract Claude activity text from a pane title, stripping leading icon characters.
@@ -941,6 +932,19 @@ const MAX_VISIBLE_TOOLS: usize = 5;
 /// Maximum number of subagents to display (others shown as count)
 const MAX_VISIBLE_SUBAGENTS: usize = 3;
 
+fn visible_recent_and_active_tools<'a>(
+    recent_tools: &'a [ActiveTool],
+    active_tools: &'a [ActiveTool],
+) -> Vec<&'a ActiveTool> {
+    let total = recent_tools.len() + active_tools.len();
+    let skip = total.saturating_sub(MAX_VISIBLE_TOOLS);
+    recent_tools
+        .iter()
+        .chain(active_tools.iter())
+        .skip(skip)
+        .collect()
+}
+
 /// Check if a tree item has an agent status to display.
 /// Count how many visual sub-lines the agent status occupies (status + optional tool).
 fn agent_status_visual_rows(item: &TreeItem) -> usize {
@@ -955,7 +959,7 @@ fn agent_status_visual_rows(item: &TreeItem) -> usize {
         },
         _ => return 0,
     };
-    1 + agent.active_tools().len().min(MAX_VISIBLE_TOOLS)
+    1 + (agent.recent_tools().len() + agent.active_tools().len()).min(MAX_VISIBLE_TOOLS)
         + if agent.failure_detail().is_some() {
             1
         } else {
@@ -1013,6 +1017,7 @@ fn render_bordered_agent_status_sub_lines(
     if let Some(emoji) = agent.event_emoji() {
         status_spans.push(Span::styled(format!(" {}", emoji), dim_style));
     }
+    let recent_tools = agent.recent_tools();
     let active_tools = agent.active_tools();
     if !active_tools.is_empty() {
         let tool_count_label = if active_tools.len() == 1 {
@@ -1030,13 +1035,8 @@ fn render_bordered_agent_status_sub_lines(
         border_style,
     )];
 
-    // Tool lines (one row per active tool, capped to most recent MAX_VISIBLE_TOOLS)
-    let visible_tools = if active_tools.len() > MAX_VISIBLE_TOOLS {
-        &active_tools[active_tools.len() - MAX_VISIBLE_TOOLS..]
-    } else {
-        active_tools
-    };
-    for tool in visible_tools {
+    // Tool lines: recent completed first, active/running at the bottom.
+    for tool in visible_recent_and_active_tools(recent_tools, active_tools) {
         let tool_text = match &tool.detail {
             Some(detail) => {
                 let display_detail = shorten_tool_detail(&tool.name, detail, toplevel);
@@ -1167,7 +1167,7 @@ pub fn subagent_visual_rows(subagents: &[&SubagentInfo], completed_count: u32) -
     let mut rows = subagents
         .iter()
         .take(visible_count)
-        .map(|s| 1 + s.tools.len().min(MAX_VISIBLE_TOOLS))
+        .map(|s| 1 + (s.recent_tools.len() + s.tools.len()).min(MAX_VISIBLE_TOOLS))
         .sum::<usize>();
 
     // Extra row for "+N more subagents"
@@ -1262,14 +1262,8 @@ pub fn render_subagent_lines(
             border_style,
         ));
 
-        // Tool lines
-        let visible_tools = if subagent.tools.len() > MAX_VISIBLE_TOOLS {
-            &subagent.tools[subagent.tools.len() - MAX_VISIBLE_TOOLS..]
-        } else {
-            &subagent.tools
-        };
-
-        for tool in visible_tools {
+        // Tool lines: recent completed first, active/running at the bottom.
+        for tool in visible_recent_and_active_tools(&subagent.recent_tools, &subagent.tools) {
             let tool_text = match &tool.detail {
                 Some(detail) => {
                     let display_detail = shorten_tool_detail(&tool.name, detail, toplevel);
@@ -1638,6 +1632,7 @@ mod tests {
                                     tool_name: None,
                                     tool_detail: None,
                                     active_tools: Vec::new(),
+                                    recent_tools: Vec::new(),
                                     failure_detail: None,
                                 }),
                             )),
@@ -2313,6 +2308,11 @@ mod tests {
         // Claude Code
         assert!(is_agent_command("claude", None));
         assert!(is_agent_command("claude", Some("opencode"))); // window name doesn't matter for claude
+
+        // Codex CLI
+        assert!(is_agent_command("codex", None));
+        assert!(is_agent_command("codex", Some("project")));
+        assert!(is_agent_command("codex-aarch64-apple-darwin", None));
 
         // OpenCode (node with opencode window name)
         assert!(is_agent_command("node", Some("opencode")));

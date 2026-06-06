@@ -21,6 +21,7 @@ use ratatui::widgets::Paragraph;
 use ratatui::Terminal;
 use tokio::sync::mpsc;
 
+use crate::agent::state::push_recent_tool;
 use crate::agent::state::{AgentState, AgentView};
 use crate::agent::{SubagentInfo, SubagentStatus};
 use crate::event::{self, Action, AppEvent};
@@ -568,6 +569,7 @@ impl App {
                 description: None,
                 state: SubagentStatus::Ended,
                 tools: Vec::new(),
+                recent_tools: Vec::new(),
                 updated_at: state.updated_at,
             };
             if let Err(e) = persist::append_subagent_state(&pane_id, &ended_info) {
@@ -609,7 +611,8 @@ impl App {
                                 .position(|t| t.key == removing.key)
                                 .or_else(|| info.tools.iter().position(|t| t.name == removing.name))
                             {
-                                info.tools.remove(pos);
+                                let completed = info.tools.remove(pos);
+                                push_recent_tool(&mut info.recent_tools, completed);
                             }
                         }
                     }
@@ -1330,6 +1333,7 @@ mod tests {
                 tool_name: None,
                 tool_detail: None,
                 active_tools: Vec::new(),
+                recent_tools: Vec::new(),
                 failure_detail: None,
                 turn_id: Some("turn-1".to_string()),
                 permission_mode: None,
@@ -1650,6 +1654,7 @@ mod tests {
                     detail: Some("Search codebase".to_string()),
                     failure_detail: None,
                 }],
+                recent_tools: Vec::new(),
                 failure_detail: None,
             }),
         );
@@ -1684,6 +1689,7 @@ mod tests {
                 tool_name: None,
                 tool_detail: None,
                 active_tools: vec![],
+                recent_tools: Vec::new(),
                 failure_detail: None,
             }),
         );
@@ -1705,6 +1711,7 @@ mod tests {
                 tool_name: None,
                 tool_detail: None,
                 active_tools: vec![],
+                recent_tools: Vec::new(),
                 failure_detail: None,
             }),
         );

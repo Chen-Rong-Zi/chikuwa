@@ -5,7 +5,7 @@ use ratatui::widgets::Paragraph;
 use ratatui::Frame;
 use unicode_width::UnicodeWidthStr;
 
-use crate::agent::state::{AgentState, AgentStatus, AgentView};
+use crate::agent::state::{ActiveTool, AgentState, AgentStatus, AgentView};
 use crate::agent::{SubagentInfo, SubagentStatus};
 use crate::tmux::types::TmuxSession;
 use crate::ui::theme;
@@ -18,6 +18,20 @@ struct AgentEntry {
     agent_state: AgentState,
     subagents: Vec<SubagentInfo>,
     completed_count: u32,
+}
+
+fn visible_recent_and_active_tools<'a>(
+    recent_tools: &'a [ActiveTool],
+    active_tools: &'a [ActiveTool],
+    max_visible: usize,
+) -> Vec<&'a ActiveTool> {
+    let total = recent_tools.len() + active_tools.len();
+    let skip = total.saturating_sub(max_visible);
+    recent_tools
+        .iter()
+        .chain(active_tools.iter())
+        .skip(skip)
+        .collect()
 }
 
 /// Collect all agent entries from sessions (only sessions with agents).
@@ -350,9 +364,8 @@ fn render_agent_room(
         is_selected,
     ));
 
-    // Tool lines (detail only, no spinner)
-    let active_tools = agent.active_tools();
-    for tool in active_tools.iter() {
+    // Tool lines: recent completed first, active/running at the bottom.
+    for tool in visible_recent_and_active_tools(agent.recent_tools(), agent.active_tools(), 5) {
         let detail = tool.detail.as_deref().unwrap_or("");
         let tool_text = truncate_to_width(detail, content_width.saturating_sub(4));
         let mut tool_spans = vec![
@@ -391,7 +404,9 @@ fn render_agent_room(
         let sub_face = theme::agent_face_emoji(&sub_status, false, anim_frame + si, sub_elapsed);
         let duration = format_duration(sub.updated_at);
 
-        if sub.tools.is_empty() {
+        let visible_tools = visible_recent_and_active_tools(&sub.recent_tools, &sub.tools, 5);
+
+        if visible_tools.is_empty() {
             // No tools: │ 👶 face    duration │
             let text = format!("👶 {}  {}", sub_face, duration);
             let text = truncate_to_width(&text, content_width.saturating_sub(4));
@@ -410,7 +425,7 @@ fn render_agent_room(
             lines.push(Line::from(spans));
         } else {
             // First tool: │ 👶 face detail  duration │
-            let first_tool = &sub.tools[0];
+            let first_tool = visible_tools[0];
             let detail = first_tool.detail.as_deref().unwrap_or("");
             let text = format!("👶 {} {}", sub_face, detail);
             let dur_text = format!("  {}", duration);
@@ -435,7 +450,7 @@ fn render_agent_room(
             lines.push(Line::from(spans));
 
             // Subsequent tools: │    detail │
-            for tool in sub.tools[1..].iter() {
+            for tool in visible_tools.iter().skip(1) {
                 let detail = tool.detail.as_deref().unwrap_or("");
                 let text = format!("   {}", detail);
                 let text = truncate_to_width(&text, content_width.saturating_sub(4));
@@ -636,6 +651,7 @@ mod tests {
                     detail: Some("src/main.rs".to_string()),
                     failure_detail: None,
                 }],
+                recent_tools: Vec::new(),
                 failure_detail: None,
             }),
         )

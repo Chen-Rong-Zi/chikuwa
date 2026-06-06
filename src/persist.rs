@@ -354,6 +354,7 @@ mod tests {
                 tool_name: None,
                 tool_detail: None,
                 active_tools: Vec::new(),
+                recent_tools: Vec::new(),
                 failure_detail: None,
             }),
         )
@@ -413,6 +414,7 @@ mod tests {
             tool_name: None,
             tool_detail: None,
             active_tools: Vec::new(),
+            recent_tools: Vec::new(),
             failure_detail: None,
         };
         let ended = AgentState::new("%0".to_string(), AgentData::Claude(ended_state.clone()));

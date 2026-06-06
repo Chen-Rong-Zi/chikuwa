@@ -1,5 +1,6 @@
 pub mod claude;
 pub mod codex_state;
+pub mod detect;
 pub mod opencode_state;
 pub mod parser;
 pub mod state;

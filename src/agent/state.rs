@@ -26,6 +26,22 @@ pub struct ActiveTool {
     pub failure_detail: Option<String>,
 }
 
+pub const RECENT_TOOLS_LIMIT: usize = 3;
+
+pub fn push_recent_tool(recent_tools: &mut Vec<ActiveTool>, tool: ActiveTool) {
+    if let Some(pos) = recent_tools
+        .iter()
+        .position(|existing| existing.key == tool.key)
+    {
+        recent_tools.remove(pos);
+    }
+    recent_tools.push(tool);
+    let overflow = recent_tools.len().saturating_sub(RECENT_TOOLS_LIMIT);
+    if overflow > 0 {
+        recent_tools.drain(0..overflow);
+    }
+}
+
 /// Which agent produced this state.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -66,6 +82,7 @@ pub trait AgentView {
     fn agent_id(&self) -> Option<&str>;
     fn event_label(&self) -> &str;
     fn event_emoji(&self) -> Option<&str>;
+    fn recent_tools(&self) -> &[ActiveTool];
     fn active_tools(&self) -> &[ActiveTool];
     fn current_tool_name(&self) -> Option<&str>;
     fn current_tool_detail(&self) -> Option<&str>;
@@ -192,6 +209,13 @@ impl AgentView for AgentState {
             AgentData::Codex(c) => &c.active_tools,
         }
     }
+    fn recent_tools(&self) -> &[ActiveTool] {
+        match &self.data {
+            AgentData::Claude(c) => &c.recent_tools,
+            AgentData::OpenCode(o) => &o.recent_tools,
+            AgentData::Codex(c) => &c.recent_tools,
+        }
+    }
     fn current_tool_name(&self) -> Option<&str> {
         match &self.data {
             AgentData::Claude(c) => c.tool_name.as_deref(),
@@ -273,6 +297,7 @@ mod tests {
                 tool_name: None,
                 tool_detail: None,
                 active_tools: Vec::new(),
+                recent_tools: Vec::new(),
                 failure_detail: None,
             }),
         );
@@ -295,6 +320,7 @@ mod tests {
                 tool_name: None,
                 tool_detail: None,
                 active_tools: Vec::new(),
+                recent_tools: Vec::new(),
                 failure_detail: None,
             }),
         );
@@ -354,6 +380,46 @@ mod tests {
         };
         assert_eq!(k1, k2);
         assert_ne!(k1, k3);
+    }
+
+    fn test_tool(name: &str, id: &str) -> ActiveTool {
+        ActiveTool {
+            key: ToolKey::Claude {
+                tool_use_id: id.to_string(),
+            },
+            name: name.to_string(),
+            detail: Some(format!("{name} detail")),
+            failure_detail: None,
+        }
+    }
+
+    #[test]
+    fn test_push_recent_tool_keeps_limit_and_oldest_to_newest_order() {
+        let mut recent = Vec::new();
+
+        push_recent_tool(&mut recent, test_tool("Bash", "1"));
+        push_recent_tool(&mut recent, test_tool("Read", "2"));
+        push_recent_tool(&mut recent, test_tool("Edit", "3"));
+        push_recent_tool(&mut recent, test_tool("Write", "4"));
+
+        assert_eq!(RECENT_TOOLS_LIMIT, 3);
+        assert_eq!(recent.len(), 3);
+        assert_eq!(recent[0].name, "Read");
+        assert_eq!(recent[1].name, "Edit");
+        assert_eq!(recent[2].name, "Write");
+    }
+
+    #[test]
+    fn test_push_recent_tool_dedupes_by_key_and_moves_to_newest() {
+        let mut recent = Vec::new();
+
+        push_recent_tool(&mut recent, test_tool("Bash", "1"));
+        push_recent_tool(&mut recent, test_tool("Read", "2"));
+        push_recent_tool(&mut recent, test_tool("Bash", "1"));
+
+        assert_eq!(recent.len(), 2);
+        assert_eq!(recent[0].name, "Read");
+        assert_eq!(recent[1].name, "Bash");
     }
 
     #[test]

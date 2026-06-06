@@ -32,7 +32,11 @@ pub struct SubagentInfo {
     /// Current status
     pub state: SubagentStatus,
     /// Currently active tools
+    #[serde(default)]
     pub tools: Vec<ActiveTool>,
+    /// Recently completed tools, oldest to newest
+    #[serde(default)]
+    pub recent_tools: Vec<ActiveTool>,
     /// Unix timestamp of last update
     pub updated_at: u64,
 }
@@ -50,6 +54,7 @@ impl SubagentInfo {
             description,
             state: SubagentStatus::Running,
             tools: Vec::new(),
+            recent_tools: Vec::new(),
             updated_at: now(),
         }
     }
@@ -77,6 +82,7 @@ mod tests {
         assert_eq!(info.description, Some("Search codebase".to_string()));
         assert_eq!(info.state, SubagentStatus::Running);
         assert!(info.tools.is_empty());
+        assert!(info.recent_tools.is_empty());
     }
 
     #[test]

@@ -278,6 +278,7 @@ impl HookParser for ClaudeHookParser {
                             tool_name: None,
                             tool_detail: None,
                             active_tools: Vec::new(),
+                            recent_tools: Vec::new(),
                             failure_detail: None,
                         }),
                     ),
@@ -304,6 +305,7 @@ impl HookParser for ClaudeHookParser {
                             tool_name: None,
                             tool_detail: None,
                             active_tools: Vec::new(),
+                            recent_tools: Vec::new(),
                             failure_detail: None,
                         }),
                     ),
@@ -380,6 +382,7 @@ impl HookParser for ClaudeHookParser {
             tool_name: input.tool_name,
             tool_detail,
             active_tools,
+            recent_tools: Vec::new(),
             failure_detail,
         };
 
@@ -433,6 +436,7 @@ impl HookParser for OpenCodeHookParser {
                     tool_name: None,
                     tool_detail: None,
                     active_tools: Vec::new(),
+                    recent_tools: Vec::new(),
                     is_busy: false,
                 };
                 return Ok(ParseResult {
@@ -469,6 +473,7 @@ impl HookParser for OpenCodeHookParser {
             tool_name,
             tool_detail,
             active_tools,
+            recent_tools: Vec::new(),
             is_busy: status == AgentStatus::Running,
         };
 
@@ -646,6 +651,7 @@ impl HookParser for CodexHookParser {
             tool_name,
             tool_detail,
             active_tools,
+            recent_tools: Vec::new(),
             failure_detail: None,
             turn_id: input.turn_id,
             permission_mode: input.permission_mode,

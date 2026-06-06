@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 
-use super::state::{ActiveTool, AgentStatus};
+use super::state::{push_recent_tool, ActiveTool, AgentStatus};
 
 /// Full state from Codex CLI hooks.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -20,6 +20,9 @@ pub struct CodexState {
     /// All active (in-flight) tool calls
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub active_tools: Vec<ActiveTool>,
+    /// Recently completed tool calls, oldest to newest
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub recent_tools: Vec<ActiveTool>,
     /// Failure message from PostToolUse failure
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub failure_detail: Option<String>,
@@ -48,6 +51,7 @@ impl CodexState {
             tool_name: None,
             tool_detail: None,
             active_tools: Vec::new(),
+            recent_tools: Vec::new(),
             failure_detail: None,
             turn_id: None,
             permission_mode: None,
@@ -71,6 +75,8 @@ impl CodexState {
             .clone()
             .or_else(|| existing.agent_id.clone());
 
+        let mut recent_tools = existing.recent_tools.clone();
+
         let active_tools = if incoming.status == AgentStatus::Running {
             match event.as_str() {
                 "PreToolUse" => {
@@ -88,7 +94,8 @@ impl CodexState {
                             .position(|tool| tool.key == removing.key)
                             .or_else(|| tools.iter().position(|tool| tool.name == removing.name));
                         if let Some(pos) = pos {
-                            tools.remove(pos);
+                            let completed = tools.remove(pos);
+                            push_recent_tool(&mut recent_tools, completed);
                         }
                     }
                     tools
@@ -96,6 +103,7 @@ impl CodexState {
                 _ => existing.active_tools.clone(),
             }
         } else {
+            recent_tools.clear();
             Vec::new()
         };
 
@@ -103,6 +111,7 @@ impl CodexState {
         merged.session_id = session_id;
         merged.agent_id = agent_id;
         merged.active_tools = active_tools;
+        merged.recent_tools = recent_tools;
 
         if is_silent {
             merged.event_emoji = existing.event_emoji.clone();
@@ -213,6 +222,8 @@ mod tests {
         let merged = CodexState::merge(incoming, &existing);
 
         assert!(merged.active_tools.is_empty());
+        assert_eq!(merged.recent_tools.len(), 1);
+        assert_eq!(merged.recent_tools[0].name, "Bash");
         assert_eq!(merged.hook_event_name, "PreToolUse");
         assert_eq!(merged.tool_detail.as_deref(), Some("ls"));
     }
@@ -230,6 +241,7 @@ mod tests {
         let merged = CodexState::merge(incoming, &existing);
 
         assert!(merged.active_tools.is_empty());
+        assert!(merged.recent_tools.is_empty());
     }
 
     #[test]

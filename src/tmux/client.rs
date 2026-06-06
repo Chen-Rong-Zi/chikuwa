@@ -5,7 +5,10 @@ use futures::future::join_all;
 use tokio::process::Command;
 
 use super::types::{TmuxPane, TmuxSession, TmuxWindow};
-use crate::agent::state::AgentState;
+use crate::agent::claude::ClaudeState;
+use crate::agent::codex_state::CodexState;
+use crate::agent::detect::detect_agent_source;
+use crate::agent::state::{AgentData, AgentState, AgentStatus};
 
 /// Fetch all tmux sessions/windows/panes and build a tree, merging agent states.
 pub async fn fetch_tree(agent_states: &HashMap<String, AgentState>) -> Result<Vec<TmuxSession>> {
@@ -57,7 +60,14 @@ fn build_tree(raw: &str, agent_states: &HashMap<String, AgentState>) -> Vec<Tmux
         let pane_current_path = fields[9].to_string();
         let pane_title = fields[10].to_string();
 
-        let agent_state = agent_states.get(&pane_id).cloned();
+        let agent_state = agent_states.get(&pane_id).cloned().or_else(|| {
+            detected_agent_state(
+                &pane_id,
+                &pane_current_command,
+                Some(&window_name),
+                Some(&pane_title),
+            )
+        });
 
         let pane = TmuxPane {
             pane_id,
@@ -106,6 +116,36 @@ fn build_tree(raw: &str, agent_states: &HashMap<String, AgentState>) -> Vec<Tmux
     }
 
     sessions
+}
+
+fn detected_agent_state(
+    pane_id: &str,
+    command: &str,
+    window_name: Option<&str>,
+    pane_title: Option<&str>,
+) -> Option<AgentState> {
+    match detect_agent_source(command, window_name, pane_title)? {
+        crate::agent::state::AgentSource::Claude => Some(AgentState::new(
+            pane_id.to_string(),
+            AgentData::Claude(ClaudeState {
+                session_id: None,
+                agent_id: None,
+                status: AgentStatus::Waiting,
+                hook_event_name: "Detected".to_string(),
+                event_emoji: "💤".to_string(),
+                tool_name: None,
+                tool_detail: None,
+                active_tools: Vec::new(),
+                recent_tools: Vec::new(),
+                failure_detail: None,
+            }),
+        )),
+        crate::agent::state::AgentSource::Codex => Some(AgentState::new(
+            pane_id.to_string(),
+            AgentData::Codex(CodexState::new("Detected", AgentStatus::Waiting, "💤")),
+        )),
+        crate::agent::state::AgentSource::OpenCode => None,
+    }
 }
 
 /// Switch the current tmux client to a given target (session, window, or pane).
@@ -290,6 +330,7 @@ mod tests {
                     tool_name: None,
                     tool_detail: None,
                     active_tools: Vec::new(),
+                    recent_tools: Vec::new(),
                     failure_detail: None,
                 }),
             ),
@@ -303,6 +344,50 @@ mod tests {
             AgentStatus::Running
         );
         assert_eq!(pane.pane_current_path, "/project");
+    }
+
+    #[test]
+    fn test_build_tree_detects_codex_command_without_hook_state() {
+        let raw = "main\t1\t0\tcodex\t1\t%0\t0\tcodex\t1\t/project\tCodex\n";
+        let tree = build_tree(raw, &HashMap::new());
+
+        let pane = &tree[0].windows[0].panes[0];
+        let state = pane.agent_state.as_ref().expect("codex pane is an agent");
+        assert_eq!(state.status(), AgentStatus::Waiting);
+        assert_eq!(state.source(), crate::agent::state::AgentSource::Codex);
+    }
+
+    #[test]
+    fn test_build_tree_detects_codex_binary_command_without_hook_state() {
+        let raw = "main\t1\t0\tcodex\t1\t%0\t0\tcodex-aarch64-apple-darwin\t1\t/project\tCodex\n";
+        let tree = build_tree(raw, &HashMap::new());
+
+        let pane = &tree[0].windows[0].panes[0];
+        let state = pane.agent_state.as_ref().expect("codex pane is an agent");
+        assert_eq!(state.status(), AgentStatus::Waiting);
+        assert_eq!(state.source(), crate::agent::state::AgentSource::Codex);
+    }
+
+    #[test]
+    fn test_build_tree_detects_codex_from_title_without_hook_state() {
+        let raw = "main\t1\t0\tproject\t1\t%0\t0\tzsh\t1\t/project\tCodex\n";
+        let tree = build_tree(raw, &HashMap::new());
+
+        let pane = &tree[0].windows[0].panes[0];
+        let state = pane.agent_state.as_ref().expect("codex pane is an agent");
+        assert_eq!(state.status(), AgentStatus::Waiting);
+        assert_eq!(state.source(), crate::agent::state::AgentSource::Codex);
+    }
+
+    #[test]
+    fn test_build_tree_detects_claude_command_without_hook_state() {
+        let raw = "main\t1\t0\tclaude\t1\t%0\t0\tclaude\t1\t/project\tClaude\n";
+        let tree = build_tree(raw, &HashMap::new());
+
+        let pane = &tree[0].windows[0].panes[0];
+        let state = pane.agent_state.as_ref().expect("claude pane is an agent");
+        assert_eq!(state.status(), AgentStatus::Waiting);
+        assert_eq!(state.source(), crate::agent::state::AgentSource::Claude);
     }
 
     #[test]
