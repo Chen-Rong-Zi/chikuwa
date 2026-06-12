@@ -421,11 +421,15 @@ impl App {
     }
 
     /// Merge agent states into the existing session tree without re-fetching tmux.
+    /// Only overwrites pane state when hook data exists for that pane — preserves
+    /// detected "Waiting" state for panes that haven't sent hook events yet.
     fn merge_agent_states(&mut self) {
         for session in &mut self.sessions {
             for window in &mut session.windows {
                 for pane in &mut window.panes {
-                    pane.agent_state = self.agent_states.get(&pane.pane_id).cloned();
+                    if let Some(state) = self.agent_states.get(&pane.pane_id) {
+                        pane.agent_state = Some(state.clone());
+                    }
                 }
             }
         }
