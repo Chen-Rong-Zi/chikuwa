@@ -180,6 +180,10 @@ pub struct App {
     view_mode: ViewMode,
     /// Last time Tick event triggered a tmux refresh (throttled to ~2s).
     last_tick_refresh: Instant,
+    /// Pending git info from background fetches, keyed by pane path.
+    pending_git_info: HashMap<String, crate::git::GitInfo>,
+    /// True when a FlushGitInfo timer is armed.
+    git_debounce_active: bool,
 }
 
 impl App {
@@ -211,6 +215,8 @@ impl App {
             usage_next_fetch: None,
             view_mode: ViewMode::Tree,
             last_tick_refresh: Instant::now() - Duration::from_secs(3),
+            pending_git_info: HashMap::new(),
+            git_debounce_active: false,
         }
     }
 
@@ -230,6 +236,58 @@ impl App {
             }
         }
         Ok(())
+    }
+
+    /// Refresh tmux tree without fetching git info.
+    async fn refresh_tree_only(&mut self) -> Result<()> {
+        match tmux_client::fetch_tree(&self.agent_states).await {
+            Ok(sessions) => {
+                self.sessions = sessions;
+                // Skip merge_git_info — git info arrives later via GitInfoReady
+                // Skip fixup_nvim_titles — needs toplevel from git info
+                self.rebuild_tree();
+            }
+            Err(_) => {
+                self.sessions.clear();
+                self.tree_items.clear();
+            }
+        }
+        Ok(())
+    }
+
+    /// Apply all pending git info to matching panes and redraw.
+    fn apply_pending_git_info(&mut self) {
+        for (path, info) in self.pending_git_info.drain() {
+            for session in &mut self.sessions {
+                for window in &mut session.windows {
+                    for pane in &mut window.panes {
+                        if pane.pane_current_path == path {
+                            pane.git_info = Some(info.clone());
+                        }
+                    }
+                }
+            }
+        }
+        // Re-derive session-level repo_name/toplevel/worktree_name
+        for session in &mut self.sessions {
+            session.repo_name = session
+                .windows
+                .iter()
+                .flat_map(|w| w.panes.iter())
+                .find_map(|p| p.git_info.as_ref().and_then(|gi| gi.repo_name.clone()));
+            session.toplevel = session
+                .windows
+                .iter()
+                .flat_map(|w| w.panes.iter())
+                .find_map(|p| p.git_info.as_ref().and_then(|gi| gi.toplevel.clone()));
+            session.worktree_name = session
+                .windows
+                .iter()
+                .flat_map(|w| w.panes.iter())
+                .find_map(|p| p.git_info.as_ref().and_then(|gi| gi.worktree_name.clone()));
+        }
+        self.fixup_nvim_titles();
+        self.rebuild_tree();
     }
 
     /// Fetch git info for all unique pane paths and merge into panes.
@@ -725,6 +783,22 @@ fn is_subagent_state(state: &AgentState) -> bool {
             state.source(),
             crate::agent::state::AgentSource::Claude | crate::agent::state::AgentSource::Codex
         )
+}
+
+/// Collect unique pane paths from sessions.
+fn collect_pane_paths(sessions: &[TmuxSession]) -> Vec<String> {
+    let mut paths: Vec<String> = Vec::new();
+    let mut seen = std::collections::HashSet::new();
+    for session in sessions {
+        for window in &session.windows {
+            for pane in &window.panes {
+                if seen.insert(pane.pane_current_path.clone()) {
+                    paths.push(pane.pane_current_path.clone());
+                }
+            }
+        }
+    }
+    paths
 }
 
 fn apply_key_action(app: &mut App, action: Action) -> bool {
