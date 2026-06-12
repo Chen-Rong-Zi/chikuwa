@@ -1229,6 +1229,12 @@ async fn run_app(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Resul
                     app.usage_next_fetch =
                         Some(std::time::Instant::now() + Duration::from_secs(next_secs));
                 }
+                AppEvent::GitInfoReady { .. } => {
+                    // Handled in Task 4
+                }
+                AppEvent::FlushGitInfo => {
+                    // Handled in Task 4
+                }
                 AppEvent::AgentStateUpdate(state) => {
                     let state = *state;
                     // Determine if this is a subagent event (Claude with agent_id)

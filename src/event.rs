@@ -1,6 +1,7 @@
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseEvent};
 
 use crate::agent::state::AgentState;
+use crate::git::GitInfo;
 use crate::usage::Usage;
 
 /// Application events.
@@ -16,6 +17,10 @@ pub enum AppEvent {
     UsageUpdate(Usage, u64),
     /// Usage fetch failed. Second field is seconds until next fetch.
     UsageError(String, u64),
+    /// Git info fetched for a pane path (ready for incremental update).
+    GitInfoReady { path: String, info: GitInfo },
+    /// Debounce timer expired — apply all pending git info and redraw.
+    FlushGitInfo,
 }
 
 /// Process a key event and return an action.
