@@ -184,6 +184,8 @@ pub struct App {
     pending_git_info: HashMap<String, crate::git::GitInfo>,
     /// True when a FlushGitInfo timer is armed.
     git_debounce_active: bool,
+    /// Minimum visible rows above/below the selected item (scrolloff).
+    scrolloff: usize,
 }
 
 impl App {
@@ -217,6 +219,7 @@ impl App {
             last_tick_refresh: Instant::now() - Duration::from_secs(3),
             pending_git_info: HashMap::new(),
             git_debounce_active: false,
+            scrolloff: 7,
         }
     }
 
@@ -539,8 +542,9 @@ impl App {
 
     fn ensure_visible(&mut self) {
         let visual = tree::item_to_visual_row(&self.tree_items, self.selected, self.last_width);
-        if visual < self.scroll_offset {
-            self.scroll_offset = visual;
+        // Ensure at least scrolloff rows above the selected item
+        if visual < self.scroll_offset + self.scrolloff {
+            self.scroll_offset = visual.saturating_sub(self.scrolloff);
         }
         // Upper bound adjusted during rendering
     }
@@ -1002,11 +1006,13 @@ async fn run_app(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Resul
         app.tree_area = chunks[1];
         let selected_visual =
             tree::item_to_visual_row(&app.tree_items, app.selected, app.last_width);
-        if selected_visual >= app.scroll_offset + visible_height {
-            app.scroll_offset = selected_visual.saturating_sub(visible_height - 1);
+        let soff = app.scrolloff;
+        if selected_visual + soff >= app.scroll_offset + visible_height {
+            let target = selected_visual.saturating_sub(visible_height.saturating_sub(soff + 1));
+            app.scroll_offset = target;
         }
-        if selected_visual < app.scroll_offset {
-            app.scroll_offset = selected_visual;
+        if selected_visual < app.scroll_offset + soff {
+            app.scroll_offset = selected_visual.saturating_sub(soff);
         }
         tree::render(
             f,
@@ -1220,14 +1226,19 @@ async fn run_app(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Resul
                         app.center_selection(visible_height);
                         app.pending_center = false;
                     } else {
-                        // Default: just ensure selected is visible
+                        // Default: enforce scrolloff margin
                         let selected_visual =
                             tree::item_to_visual_row(&app.tree_items, app.selected, app.last_width);
-                        if selected_visual >= app.scroll_offset + visible_height {
-                            app.scroll_offset = selected_visual.saturating_sub(visible_height - 1);
+                        let soff = app.scrolloff;
+                        // Bottom margin: selected must be at most (visible_height - soff - 1) from top
+                        if selected_visual + soff >= app.scroll_offset + visible_height {
+                            let target = selected_visual
+                                .saturating_sub(visible_height.saturating_sub(soff + 1));
+                            app.scroll_offset = target;
                         }
-                        if selected_visual < app.scroll_offset {
-                            app.scroll_offset = selected_visual;
+                        // Top margin: selected must be at least soff from top
+                        if selected_visual < app.scroll_offset + soff {
+                            app.scroll_offset = selected_visual.saturating_sub(soff);
                         }
                     }
 
