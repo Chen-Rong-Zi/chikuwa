@@ -29,7 +29,7 @@ use crate::git::GitInfoCache;
 use crate::ipc;
 use crate::persist;
 use crate::tmux::{client as tmux_client, types::TmuxSession};
-use crate::ui::{office, status_bar, theme, tree};
+use crate::ui::{status_bar, theme, tree};
 use crate::usage::Usage;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -384,11 +384,6 @@ impl App {
     fn rebuild_tree(&mut self) {
         self.tree_items = tree::flatten(&self.sessions, &self.collapsed);
 
-        // Skip auto-follow in office view — selected is an agent index, not a tree index
-        if self.view_mode == ViewMode::Office {
-            return;
-        }
-
         // On first selection, try to select the pane where chikuwa is running
         if self.first_selection {
             if let Ok(pane_id) = std::env::var("TMUX_PANE") {
@@ -440,22 +435,13 @@ impl App {
     fn move_up(&mut self) {
         self.user_navigated = true;
         self.pending_center = true;
-        match self.view_mode {
-            ViewMode::Tree => {
-                let mut idx = self.selected;
-                while idx > 0 {
-                    idx -= 1;
-                    if self.tree_items[idx].is_selectable() {
-                        self.selected = idx;
-                        self.ensure_visible();
-                        return;
-                    }
-                }
-            }
-            ViewMode::Office => {
-                if self.selected > 0 {
-                    self.selected -= 1;
-                }
+        let mut idx = self.selected;
+        while idx > 0 {
+            idx -= 1;
+            if self.tree_items[idx].is_selectable() {
+                self.selected = idx;
+                self.ensure_visible();
+                return;
             }
         }
     }
@@ -463,24 +449,13 @@ impl App {
     fn move_down(&mut self) {
         self.user_navigated = true;
         self.pending_center = true;
-        match self.view_mode {
-            ViewMode::Tree => {
-                let mut idx = self.selected;
-                while idx < self.tree_items.len().saturating_sub(1) {
-                    idx += 1;
-                    if self.tree_items[idx].is_selectable() {
-                        self.selected = idx;
-                        self.ensure_visible();
-                        return;
-                    }
-                }
-            }
-            ViewMode::Office => {
-                let subagent_data = self.build_subagent_data();
-                let max = office::agent_count(&self.sessions, &subagent_data).saturating_sub(1);
-                if self.selected < max {
-                    self.selected += 1;
-                }
+        let mut idx = self.selected;
+        while idx < self.tree_items.len().saturating_sub(1) {
+            idx += 1;
+            if self.tree_items[idx].is_selectable() {
+                self.selected = idx;
+                self.ensure_visible();
+                return;
             }
         }
     }
@@ -488,36 +463,20 @@ impl App {
     fn move_top(&mut self) {
         self.user_navigated = true;
         self.pending_center = true;
-        match self.view_mode {
-            ViewMode::Tree => {
-                if let Some(idx) = self.tree_items.iter().position(|item| item.is_selectable()) {
-                    self.selected = idx;
-                }
-            }
-            ViewMode::Office => {
-                self.selected = 0;
-            }
+        if let Some(idx) = self.tree_items.iter().position(|item| item.is_selectable()) {
+            self.selected = idx;
         }
     }
 
     fn move_bottom(&mut self) {
         self.user_navigated = true;
         self.pending_center = true;
-        match self.view_mode {
-            ViewMode::Tree => {
-                if let Some(idx) = self
-                    .tree_items
-                    .iter()
-                    .rposition(|item| item.is_selectable())
-                {
-                    self.selected = idx;
-                }
-            }
-            ViewMode::Office => {
-                let subagent_data = self.build_subagent_data();
-                let max = office::agent_count(&self.sessions, &subagent_data).saturating_sub(1);
-                self.selected = max;
-            }
+        if let Some(idx) = self
+            .tree_items
+            .iter()
+            .rposition(|item| item.is_selectable())
+        {
+            self.selected = idx;
         }
     }
 
@@ -712,20 +671,6 @@ impl App {
     }
 
     async fn handle_select(&mut self) -> Result<()> {
-        if self.view_mode == ViewMode::Office {
-            let subagent_data = self.build_subagent_data();
-            if let Some(target) =
-                office::selected_tmux_target(&self.sessions, &subagent_data, self.selected)
-            {
-                self.user_navigated = false;
-                if let Err(e) = tmux_client::switch_to(&target).await {
-                    eprintln!("Warning: failed to switch tmux: {}", e);
-                }
-                self.refresh().await?;
-            }
-            return Ok(());
-        }
-
         if self.tree_items.is_empty() {
             return Ok(());
         }
@@ -895,7 +840,7 @@ fn render_title(f: &mut ratatui::Frame, area: ratatui::layout::Rect, app: &App) 
         spans.push(Span::styled(
             match app.view_mode {
                 ViewMode::Tree => "  ",
-                ViewMode::Office => ":office  ",
+                ViewMode::Office => ":pixtuoid  ",
             },
             white_style,
         ));
@@ -915,7 +860,7 @@ fn render_title(f: &mut ratatui::Frame, area: ratatui::layout::Rect, app: &App) 
             Span::styled(
                 match app.view_mode {
                     ViewMode::Tree => "  chikuwa  ",
-                    ViewMode::Office => "  chikuwa:office  ",
+                    ViewMode::Office => "  chikuwa:pixtuoid  ",
                 },
                 white_style,
             ),
@@ -1253,46 +1198,7 @@ async fn run_app(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Resul
                     );
                 }
                 ViewMode::Office => {
-                    // Compute scroll offset before rendering
-                    let (room_start, room_end, total_lines_val) = office::selected_line_range(
-                        &app.sessions,
-                        &subagent_data,
-                        app.last_width,
-                        app.selected,
-                        app.anim_frame,
-                    );
-
-                    if app.pending_center {
-                        let center = (room_start + room_end) / 2;
-                        let desired_offset = center.saturating_sub(visible_height / 2);
-                        let max_scroll = total_lines_val.saturating_sub(visible_height);
-                        app.scroll_offset = desired_offset.min(max_scroll);
-                        app.pending_center = false;
-                    } else {
-                        // Ensure selected room is visible
-                        if room_end >= app.scroll_offset + visible_height {
-                            app.scroll_offset = room_end.saturating_sub(visible_height - 1);
-                        }
-                        if room_start < app.scroll_offset {
-                            app.scroll_offset = room_start;
-                        }
-                    }
-
-                    office::render(
-                        f,
-                        chunks[1],
-                        &app.sessions,
-                        &subagent_data,
-                        app.selected,
-                        app.scroll_offset,
-                        app.anim_frame,
-                    );
-
-                    // Clamp selected to valid range
-                    let count = office::agent_count(&app.sessions, &subagent_data);
-                    if count > 0 && app.selected >= count {
-                        app.selected = count - 1;
-                    }
+                    // Pixtuoid mode — no TUI rendering; handled in ToggleView action
                 }
             }
 
