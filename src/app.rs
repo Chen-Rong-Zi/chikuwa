@@ -973,7 +973,11 @@ async fn run_app(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Resul
     terminal.draw(|f| {
         let chunks = Layout::default()
             .direction(Direction::Vertical)
-            .constraints([Constraint::Length(3), Constraint::Min(3), Constraint::Length(3)])
+            .constraints([
+                Constraint::Length(3),
+                Constraint::Min(3),
+                Constraint::Length(3),
+            ])
             .split(f.area());
         render_title(f, chunks[0], &app);
         render_status_bar(f, chunks[2], &app.sessions, None, None);
@@ -986,20 +990,33 @@ async fn run_app(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Resul
     terminal.draw(|f| {
         let chunks = Layout::default()
             .direction(Direction::Vertical)
-            .constraints([Constraint::Length(3), Constraint::Min(3), Constraint::Length(3)])
+            .constraints([
+                Constraint::Length(3),
+                Constraint::Min(3),
+                Constraint::Length(3),
+            ])
             .split(f.area());
         render_title(f, chunks[0], &app);
         let visible_height = chunks[1].height as usize;
         app.last_width = chunks[1].width;
         app.tree_area = chunks[1];
-        let selected_visual = tree::item_to_visual_row(&app.tree_items, app.selected, app.last_width);
+        let selected_visual =
+            tree::item_to_visual_row(&app.tree_items, app.selected, app.last_width);
         if selected_visual >= app.scroll_offset + visible_height {
             app.scroll_offset = selected_visual.saturating_sub(visible_height - 1);
         }
         if selected_visual < app.scroll_offset {
             app.scroll_offset = selected_visual;
         }
-        tree::render(f, chunks[1], &app.tree_items, app.selected, app.scroll_offset, app.anim_frame, &HashMap::new());
+        tree::render(
+            f,
+            chunks[1],
+            &app.tree_items,
+            app.selected,
+            app.scroll_offset,
+            app.anim_frame,
+            &HashMap::new(),
+        );
         render_status_bar(f, chunks[2], &app.sessions, None, None);
     })?;
 

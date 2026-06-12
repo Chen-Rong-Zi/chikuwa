@@ -18,7 +18,10 @@ pub enum AppEvent {
     /// Usage fetch failed. Second field is seconds until next fetch.
     UsageError(String, u64),
     /// Git info fetched for a pane path (ready for incremental update).
-    GitInfoReady { path: String, info: GitInfo },
+    GitInfoReady {
+        path: String,
+        info: GitInfo,
+    },
     /// Debounce timer expired — apply all pending git info and redraw.
     FlushGitInfo,
 }
