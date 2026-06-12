@@ -761,16 +761,7 @@ fn apply_key_action(app: &mut App, action: Action) -> bool {
         Action::Top => app.move_top(),
         Action::Bottom => app.move_bottom(),
         Action::ToggleCollapse => app.toggle_current_session(),
-        Action::ToggleView => {
-            app.view_mode = match app.view_mode {
-                ViewMode::Tree => ViewMode::Office,
-                ViewMode::Office => ViewMode::Tree,
-            };
-            app.selected = 0;
-            app.scroll_offset = 0;
-            app.user_navigated = true;
-        }
-        Action::Select | Action::None => {}
+        Action::Select | Action::ToggleView | Action::None => {}
     }
 
     false
@@ -1226,6 +1217,36 @@ async fn run_app(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Resul
                     let action = event::handle_key(key);
                     if action == Action::Select {
                         app.handle_select().await?;
+                    } else if action == Action::ToggleView {
+                        if app.view_mode == ViewMode::Tree {
+                            disable_raw_mode()?;
+                            execute!(
+                                terminal.backend_mut(),
+                                LeaveAlternateScreen,
+                                DisableMouseCapture
+                            )?;
+                            terminal.show_cursor()?;
+
+                            let status = tokio::process::Command::new("pixtuoid")
+                                .arg("run")
+                                .status()
+                                .await;
+
+                            enable_raw_mode()?;
+                            execute!(
+                                terminal.backend_mut(),
+                                EnterAlternateScreen,
+                                EnableMouseCapture
+                            )?;
+                            terminal.hide_cursor()?;
+
+                            if let Err(e) = status {
+                                eprintln!("Warning: pixtuoid failed: {}", e);
+                            }
+
+                            app.view_mode = ViewMode::Tree;
+                            app.refresh().await?;
+                        }
                     } else if apply_key_action(&mut app, action) {
                         break;
                     }
