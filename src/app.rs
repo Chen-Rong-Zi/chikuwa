@@ -171,8 +171,8 @@ pub struct App {
     user_navigated: bool,
     /// True until the first selection is made (used to select TMUX_PANE on startup).
     first_selection: bool,
-    /// When true, center the selected row on next render.
-    pending_center: bool,
+    /// Cached visible height for scrolloff calculations outside draw.
+    visible_height: usize,
     /// Claude API usage data (fetched periodically).
     usage: Option<Result<Usage, String>>,
     /// When the next usage fetch is scheduled.
@@ -212,7 +212,7 @@ impl App {
             tree_area: ratatui::layout::Rect::default(),
             user_navigated: false,
             first_selection: true,
-            pending_center: false,
+            visible_height: 0,
             usage: persist::load_usage().map(Ok),
             usage_next_fetch: None,
             view_mode: ViewMode::Tree,
@@ -434,7 +434,6 @@ impl App {
 
     fn move_up(&mut self) {
         self.user_navigated = true;
-        self.pending_center = true;
         let mut idx = self.selected;
         while idx > 0 {
             idx -= 1;
@@ -448,7 +447,6 @@ impl App {
 
     fn move_down(&mut self) {
         self.user_navigated = true;
-        self.pending_center = true;
         let mut idx = self.selected;
         while idx < self.tree_items.len().saturating_sub(1) {
             idx += 1;
@@ -462,7 +460,6 @@ impl App {
 
     fn move_top(&mut self) {
         self.user_navigated = true;
-        self.pending_center = true;
         if let Some(idx) = self.tree_items.iter().position(|item| item.is_selectable()) {
             self.selected = idx;
         }
@@ -470,7 +467,6 @@ impl App {
 
     fn move_bottom(&mut self) {
         self.user_navigated = true;
-        self.pending_center = true;
         if let Some(idx) = self
             .tree_items
             .iter()
@@ -501,28 +497,19 @@ impl App {
 
     fn ensure_visible(&mut self) {
         let visual = tree::item_to_visual_row(&self.tree_items, self.selected, self.last_width);
-        // Ensure at least scrolloff rows above the selected item
-        if visual < self.scroll_offset + self.scrolloff {
-            self.scroll_offset = visual.saturating_sub(self.scrolloff);
-        }
-        // Upper bound adjusted during rendering
-    }
-
-    /// Center the selected item in the viewport.
-    fn center_selection(&mut self, visible_height: usize) {
-        if visible_height == 0 {
+        let vh = self.visible_height;
+        if vh == 0 {
             return;
         }
-        let visual = tree::item_to_visual_row(&self.tree_items, self.selected, self.last_width);
-        let total_visual = tree::total_visual_rows(&self.tree_items, self.last_width);
-
-        // Calculate center position
-        let half_height = visible_height / 2;
-        let desired_offset = visual.saturating_sub(half_height);
-
-        // Clamp to valid range
-        let max_offset = total_visual.saturating_sub(visible_height);
-        self.scroll_offset = desired_offset.min(max_offset);
+        let soff = self.scrolloff;
+        // Bottom margin: selected must be at most (visible_height - soff - 1) from top
+        if visual + soff >= self.scroll_offset + vh {
+            self.scroll_offset = visual.saturating_sub(vh.saturating_sub(soff + 1));
+        }
+        // Top margin: selected must be at least soff from top
+        if visual < self.scroll_offset + soff {
+            self.scroll_offset = visual.saturating_sub(soff);
+        }
     }
 
     /// Get all active subagents for a given tmux pane, sorted by update time (newest first).
@@ -939,17 +926,9 @@ async fn run_app(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Resul
         render_title(f, chunks[0], &app);
         let visible_height = chunks[1].height as usize;
         app.last_width = chunks[1].width;
+        app.visible_height = visible_height;
         app.tree_area = chunks[1];
-        let selected_visual =
-            tree::item_to_visual_row(&app.tree_items, app.selected, app.last_width);
-        let soff = app.scrolloff;
-        if selected_visual + soff >= app.scroll_offset + visible_height {
-            let target = selected_visual.saturating_sub(visible_height.saturating_sub(soff + 1));
-            app.scroll_offset = target;
-        }
-        if selected_visual < app.scroll_offset + soff {
-            app.scroll_offset = selected_visual.saturating_sub(soff);
-        }
+        app.ensure_visible();
         tree::render(
             f,
             chunks[1],
@@ -1153,30 +1132,14 @@ async fn run_app(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Resul
             app.tree_area = chunks[1];
             let visible_height = chunks[1].height as usize;
             app.last_width = chunks[1].width;
+            app.visible_height = visible_height;
 
             let subagent_data = app.build_subagent_data();
 
             match app.view_mode {
                 ViewMode::Tree => {
-                    if app.pending_center {
-                        app.center_selection(visible_height);
-                        app.pending_center = false;
-                    } else {
-                        // Default: enforce scrolloff margin
-                        let selected_visual =
-                            tree::item_to_visual_row(&app.tree_items, app.selected, app.last_width);
-                        let soff = app.scrolloff;
-                        // Bottom margin: selected must be at most (visible_height - soff - 1) from top
-                        if selected_visual + soff >= app.scroll_offset + visible_height {
-                            let target = selected_visual
-                                .saturating_sub(visible_height.saturating_sub(soff + 1));
-                            app.scroll_offset = target;
-                        }
-                        // Top margin: selected must be at least soff from top
-                        if selected_visual < app.scroll_offset + soff {
-                            app.scroll_offset = selected_visual.saturating_sub(soff);
-                        }
-                    }
+                    // Enforce scrolloff margin (handles both top and bottom)
+                    app.ensure_visible();
 
                     tree::render(
                         f,
