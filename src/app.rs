@@ -827,6 +827,113 @@ fn apply_key_action(app: &mut App, action: Action) -> bool {
     false
 }
 
+/// Render the title bar into the given area.
+fn render_title(f: &mut ratatui::Frame, area: ratatui::layout::Rect, app: &App) {
+    let has_running = app
+        .agent_states
+        .values()
+        .any(|s| s.status() == crate::agent::state::AgentStatus::Running);
+    let title_spans = if has_running {
+        // Shine effect: white highlight sweeps across purple base
+        let wave_palette = {
+            let white: (f32, f32, f32) = (0xff as f32, 0xff as f32, 0xff as f32);
+            let purple: (f32, f32, f32) = (0x92 as f32, 0x93 as f32, 0xfe as f32);
+            // Sharp peak: 3 steps rise, 3 steps fall, long purple rest
+            let total = 40;
+            let peak = 3;
+            let mut palette = Vec::with_capacity(total);
+            for i in 0..total {
+                let t = if i < peak {
+                    // rise to white
+                    i as f32 / peak as f32
+                } else if i < peak * 2 {
+                    // fall back to purple
+                    1.0 - (i - peak) as f32 / peak as f32
+                } else {
+                    // stay purple
+                    0.0
+                };
+                // ease-in-out for smoother peak
+                let t = t * t * (3.0 - 2.0 * t);
+                let r = purple.0 + (white.0 - purple.0) * t;
+                let g = purple.1 + (white.1 - purple.1) * t;
+                let b = purple.2 + (white.2 - purple.2) * t;
+                palette.push(Color::Rgb(r as u8, g as u8, b as u8));
+            }
+            palette
+        };
+        let plen = wave_palette.len();
+        let chikuwa_spans: Vec<Span> = "chikuwa"
+            .chars()
+            .enumerate()
+            .map(|(i, c)| {
+                let idx = (plen + i * 2 - app.anim_frame * 3 % plen) % plen;
+                Span::styled(
+                    c.to_string(),
+                    Style::default()
+                        .fg(wave_palette[idx])
+                        .add_modifier(Modifier::BOLD),
+                )
+            })
+            .collect();
+        let bolt_style = Style::default()
+            .fg(theme::COLOR_YELLOW)
+            .add_modifier(Modifier::BOLD);
+        let white_style = Style::default()
+            .fg(theme::COLOR_WHITE)
+            .add_modifier(Modifier::BOLD);
+        let mut spans = vec![
+            Span::styled("🐧 ", white_style),
+            Span::styled(theme::ICON_BOLT, bolt_style),
+            Span::styled("  ", white_style),
+        ];
+        spans.extend(chikuwa_spans);
+        spans.push(Span::styled(
+            match app.view_mode {
+                ViewMode::Tree => "  ",
+                ViewMode::Office => ":office  ",
+            },
+            white_style,
+        ));
+        spans.push(Span::styled(theme::ICON_BOLT, bolt_style));
+        spans.push(Span::styled(" 🐧", white_style));
+        spans
+    } else {
+        let bolt_style = Style::default()
+            .fg(theme::COLOR_YELLOW)
+            .add_modifier(Modifier::BOLD);
+        let white_style = Style::default()
+            .fg(theme::COLOR_WHITE)
+            .add_modifier(Modifier::BOLD);
+        vec![
+            Span::styled("🐧 ", white_style),
+            Span::styled(theme::ICON_BOLT, bolt_style),
+            Span::styled(
+                match app.view_mode {
+                    ViewMode::Tree => "  chikuwa  ",
+                    ViewMode::Office => "  chikuwa:office  ",
+                },
+                white_style,
+            ),
+            Span::styled(theme::ICON_BOLT, bolt_style),
+            Span::styled(" 🐧", white_style),
+        ]
+    };
+    let title = vec![Line::from(""), Line::from(title_spans)];
+    f.render_widget(Paragraph::new(title).alignment(Alignment::Center), area);
+}
+
+/// Render the status bar into the given area.
+fn render_status_bar(
+    f: &mut ratatui::Frame,
+    area: ratatui::layout::Rect,
+    sessions: &[TmuxSession],
+    usage: Option<std::result::Result<&Usage, &String>>,
+    usage_remaining: Option<u64>,
+) {
+    status_bar::render(f, area, sessions, usage, usage_remaining);
+}
+
 /// Run the TUI application.
 pub async fn run() -> Result<()> {
     // Setup terminal
@@ -857,18 +964,62 @@ pub async fn run() -> Result<()> {
 async fn run_app(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Result<()> {
     let mut app = App::new();
 
-    // Initial data fetch
-    app.refresh().await?;
-
-    // Register tmux hooks for instant change notifications (non-fatal on error)
-    if let Err(e) = tmux_client::register_hooks().await {
-        eprintln!("Warning: failed to register tmux hooks: {}", e);
-    }
-
-    // Event channel (larger buffer to handle bursts from IPC and events)
+    // Event channel — create early so Stage 3 background tasks can use it
     let (tx, mut rx) = mpsc::channel(256);
     let shutdown = Arc::new(AtomicBool::new(false));
     let mut handles: Vec<tokio::task::JoinHandle<()>> = Vec::new();
+
+    // ── Stage 1: Shell frame (before any I/O) ──
+    terminal.draw(|f| {
+        let chunks = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([Constraint::Length(3), Constraint::Min(3), Constraint::Length(3)])
+            .split(f.area());
+        render_title(f, chunks[0], &app);
+        render_status_bar(f, chunks[2], &app.sessions, None, None);
+    })?;
+
+    // ── Stage 2: Tmux structure only (no git info) ──
+    app.refresh_tree_only().await?;
+
+    // Draw with tmux tree visible
+    terminal.draw(|f| {
+        let chunks = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([Constraint::Length(3), Constraint::Min(3), Constraint::Length(3)])
+            .split(f.area());
+        render_title(f, chunks[0], &app);
+        let visible_height = chunks[1].height as usize;
+        app.last_width = chunks[1].width;
+        app.tree_area = chunks[1];
+        let selected_visual = tree::item_to_visual_row(&app.tree_items, app.selected, app.last_width);
+        if selected_visual >= app.scroll_offset + visible_height {
+            app.scroll_offset = selected_visual.saturating_sub(visible_height - 1);
+        }
+        if selected_visual < app.scroll_offset {
+            app.scroll_offset = selected_visual;
+        }
+        tree::render(f, chunks[1], &app.tree_items, app.selected, app.scroll_offset, app.anim_frame, &HashMap::new());
+        render_status_bar(f, chunks[2], &app.sessions, None, None);
+    })?;
+
+    // ── Stage 3: Background git info fetch + hook registration ──
+    let paths = collect_pane_paths(&app.sessions);
+    let git_tx = tx.clone();
+    for path in paths {
+        let tx = git_tx.clone();
+        tokio::spawn(async move {
+            if let Some(info) = crate::git::fetch_git_info(&path).await {
+                let _ = tx.send(AppEvent::GitInfoReady { path, info }).await;
+            }
+        });
+    }
+    // Hook registration (background, non-blocking)
+    tokio::spawn(async move {
+        if let Err(e) = tmux_client::register_hooks().await {
+            eprintln!("Warning: failed to register tmux hooks: {}", e);
+        }
+    });
 
     // Spawn event loop in a blocking thread (crossterm events are blocking)
     // Use std::sync::mpsc to avoid nested block_on anti-pattern
@@ -1037,102 +1188,7 @@ async fn run_app(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Resul
                 ])
                 .split(size);
 
-            // Render title bar — wave sparkle when any agent is Running
-            let has_running = app
-                .agent_states
-                .values()
-                .any(|s| s.status() == crate::agent::state::AgentStatus::Running);
-            let title_spans = if has_running {
-                // Shine effect: white highlight sweeps across purple base
-                let wave_palette = {
-                    let white: (f32, f32, f32) = (0xff as f32, 0xff as f32, 0xff as f32);
-                    let purple: (f32, f32, f32) = (0x92 as f32, 0x93 as f32, 0xfe as f32);
-                    // Sharp peak: 3 steps rise, 3 steps fall, long purple rest
-                    let total = 40;
-                    let peak = 3;
-                    let mut palette = Vec::with_capacity(total);
-                    for i in 0..total {
-                        let t = if i < peak {
-                            // rise to white
-                            i as f32 / peak as f32
-                        } else if i < peak * 2 {
-                            // fall back to purple
-                            1.0 - (i - peak) as f32 / peak as f32
-                        } else {
-                            // stay purple
-                            0.0
-                        };
-                        // ease-in-out for smoother peak
-                        let t = t * t * (3.0 - 2.0 * t);
-                        let r = purple.0 + (white.0 - purple.0) * t;
-                        let g = purple.1 + (white.1 - purple.1) * t;
-                        let b = purple.2 + (white.2 - purple.2) * t;
-                        palette.push(Color::Rgb(r as u8, g as u8, b as u8));
-                    }
-                    palette
-                };
-                let plen = wave_palette.len();
-                let chikuwa_spans: Vec<Span> = "chikuwa"
-                    .chars()
-                    .enumerate()
-                    .map(|(i, c)| {
-                        let idx = (plen + i * 2 - app.anim_frame * 3 % plen) % plen;
-                        Span::styled(
-                            c.to_string(),
-                            Style::default()
-                                .fg(wave_palette[idx])
-                                .add_modifier(Modifier::BOLD),
-                        )
-                    })
-                    .collect();
-                let bolt_style = Style::default()
-                    .fg(theme::COLOR_YELLOW)
-                    .add_modifier(Modifier::BOLD);
-                let white_style = Style::default()
-                    .fg(theme::COLOR_WHITE)
-                    .add_modifier(Modifier::BOLD);
-                let mut spans = vec![
-                    Span::styled("🐧 ", white_style),
-                    Span::styled(theme::ICON_BOLT, bolt_style),
-                    Span::styled("  ", white_style),
-                ];
-                spans.extend(chikuwa_spans);
-                spans.push(Span::styled(
-                    match app.view_mode {
-                        ViewMode::Tree => "  ",
-                        ViewMode::Office => ":office  ",
-                    },
-                    white_style,
-                ));
-                spans.push(Span::styled(theme::ICON_BOLT, bolt_style));
-                spans.push(Span::styled(" 🐧", white_style));
-                spans
-            } else {
-                let bolt_style = Style::default()
-                    .fg(theme::COLOR_YELLOW)
-                    .add_modifier(Modifier::BOLD);
-                let white_style = Style::default()
-                    .fg(theme::COLOR_WHITE)
-                    .add_modifier(Modifier::BOLD);
-                vec![
-                    Span::styled("🐧 ", white_style),
-                    Span::styled(theme::ICON_BOLT, bolt_style),
-                    Span::styled(
-                        match app.view_mode {
-                            ViewMode::Tree => "  chikuwa  ",
-                            ViewMode::Office => "  chikuwa:office  ",
-                        },
-                        white_style,
-                    ),
-                    Span::styled(theme::ICON_BOLT, bolt_style),
-                    Span::styled(" 🐧", white_style),
-                ]
-            };
-            let title = vec![Line::from(""), Line::from(title_spans)];
-            f.render_widget(
-                Paragraph::new(title).alignment(Alignment::Center),
-                chunks[0],
-            );
+            render_title(f, chunks[0], &app);
 
             // Adjust scroll for visible area (visual rows, no outer border)
             app.tree_area = chunks[1];
@@ -1212,12 +1268,11 @@ async fn run_app(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Resul
                 }
             }
 
-            // Render status bar
             let usage_remaining = app.usage_next_fetch.map(|t| {
                 t.saturating_duration_since(std::time::Instant::now())
                     .as_secs()
             });
-            status_bar::render(
+            render_status_bar(
                 f,
                 chunks[2],
                 &app.sessions,
@@ -1303,11 +1358,20 @@ async fn run_app(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Resul
                     app.usage_next_fetch =
                         Some(std::time::Instant::now() + Duration::from_secs(next_secs));
                 }
-                AppEvent::GitInfoReady { .. } => {
-                    // Handled in Task 4
+                AppEvent::GitInfoReady { path, info } => {
+                    app.pending_git_info.insert(path, info);
+                    if !app.git_debounce_active {
+                        app.git_debounce_active = true;
+                        let flush_tx = tx.clone();
+                        tokio::spawn(async move {
+                            tokio::time::sleep(Duration::from_millis(50)).await;
+                            let _ = flush_tx.send(AppEvent::FlushGitInfo).await;
+                        });
+                    }
                 }
                 AppEvent::FlushGitInfo => {
-                    // Handled in Task 4
+                    app.git_debounce_active = false;
+                    app.apply_pending_git_info();
                 }
                 AppEvent::AgentStateUpdate(state) => {
                     let state = *state;
