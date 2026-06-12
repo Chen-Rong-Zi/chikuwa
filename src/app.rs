@@ -1260,7 +1260,6 @@ async fn run_app(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Resul
                     }
                 }
                 AppEvent::TmuxChanged => {
-                    app.user_navigated = false;
                     app.refresh().await?;
                 }
                 AppEvent::AnimationTick => {

@@ -103,10 +103,12 @@ impl CodexState {
                 _ => existing.active_tools.clone(),
             }
         } else {
-            recent_tools.clear();
+            // Preserve active tools as recent to avoid visual flicker on Stop/Waiting
+            for tool in &existing.active_tools {
+                push_recent_tool(&mut recent_tools, tool.clone());
+            }
             Vec::new()
         };
-
         let mut merged = incoming;
         merged.session_id = session_id;
         merged.agent_id = agent_id;
@@ -241,7 +243,9 @@ mod tests {
         let merged = CodexState::merge(incoming, &existing);
 
         assert!(merged.active_tools.is_empty());
-        assert!(merged.recent_tools.is_empty());
+        // recent_tools preserved across Stop/Waiting transitions to avoid visual flicker
+        assert_eq!(merged.recent_tools.len(), 1);
+        assert_eq!(merged.recent_tools[0].name, "Bash");
     }
 
     #[test]
