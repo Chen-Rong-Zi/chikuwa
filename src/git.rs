@@ -212,6 +212,30 @@ impl GitInfoCache {
     }
 }
 
+/// Fetch all git info for a path from scratch, without using the cache.
+/// Fetches branch, repo name, toplevel, worktree name in parallel,
+/// then fetches PR info (depends on branch).
+pub async fn fetch_git_info(path: &str) -> Option<GitInfo> {
+    let (branch, repo_name, toplevel, worktree_name) = tokio::join!(
+        fetch_branch(path),
+        fetch_repo_name(path),
+        fetch_toplevel(path),
+        fetch_worktree_name(path),
+    );
+    let pr = if let Some(ref b) = branch {
+        fetch_pr(path, b).await
+    } else {
+        None
+    };
+    Some(GitInfo {
+        branch,
+        pr,
+        repo_name,
+        toplevel,
+        worktree_name,
+    })
+}
+
 /// Get current branch name via `git rev-parse --abbrev-ref HEAD`.
 /// Falls back to short SHA for detached HEAD.
 async fn fetch_branch(path: &str) -> Option<String> {
