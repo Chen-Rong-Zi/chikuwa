@@ -1,9 +1,10 @@
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-use super::state::{push_recent_tool, ActiveTool, AgentStatus};
+use crate::state::{push_recent_tool, ActiveTool, AgentStatus};
 
 /// Full state from OpenCode hooks/plugin.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct OpenCodeState {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub session_id: Option<String>,
@@ -79,7 +80,7 @@ impl OpenCodeState {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::agent::state::ToolKey;
+    use crate::state::{AgentView, ToolKey};
 
     fn make_state(event: &str, status: AgentStatus) -> OpenCodeState {
         OpenCodeState {
@@ -232,6 +233,16 @@ mod tests {
 
         let merged = OpenCodeState::merge(incoming, &existing);
         assert_eq!(merged.active_tools.len(), 1);
+    }
+
+    #[test]
+    fn test_opencode_agent_state_roundtrip() {
+        let json = r#"{"tmux_pane":"%test","updated_at":1781347883,"data":{"type":"opencode","session_id":"test_ses_123","status":"running","event_type":"tool.running","event_emoji":"🔧","tool_name":"read","tool_detail":"/tmp/test.txt","active_tools":[{"key":{"type":"opencode","name":"read","detail":"/tmp/test.txt"},"name":"read","detail":"/tmp/test.txt"},{"key":{"type":"opencode","name":"bash","detail":"echo hello"},"name":"bash","detail":"echo hello"}],"is_busy":true}}"#;
+        let state: crate::state::AgentState = serde_json::from_str(json).unwrap();
+        assert_eq!(state.tmux_pane, "%test");
+        assert_eq!(state.status(), crate::state::AgentStatus::Running);
+        assert_eq!(state.source(), crate::state::AgentSource::OpenCode);
+        assert_eq!(state.active_tools().len(), 2);
     }
 
     #[test]

@@ -188,6 +188,12 @@ pub struct App {
     scrolloff: usize,
 }
 
+impl Default for App {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl App {
     pub fn new() -> Self {
         let mut git_cache = GitInfoCache::new();
@@ -424,15 +430,22 @@ impl App {
     /// Only overwrites pane state when hook data exists for that pane — preserves
     /// detected "Waiting" state for panes that haven't sent hook events yet.
     fn merge_agent_states(&mut self) {
+        let mut updated = 0u32;
         for session in &mut self.sessions {
             for window in &mut session.windows {
                 for pane in &mut window.panes {
                     if let Some(state) = self.agent_states.get(&pane.pane_id) {
                         pane.agent_state = Some(state.clone());
+                        updated += 1;
                     }
                 }
             }
         }
+        crate::ipc::debug_log(format!(
+            "merge_agent_states: {} panes updated, sessions={}",
+            updated,
+            self.sessions.len(),
+        ));
         self.rebuild_tree();
     }
 
@@ -1296,26 +1309,66 @@ async fn run_app(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Resul
                 }
                 AppEvent::AgentStateUpdate(state) => {
                     let state = *state;
+                    crate::ipc::debug_log(format!(
+                        "AgentStateUpdate: pane={} status={:?} source={:?} tools={} event={} session_id={:?}",
+                        state.tmux_pane,
+                        state.status(),
+                        state.source(),
+                        state.active_tools().len(),
+                        state.event_label(),
+                        state.session_id(),
+                    ));
                     // Determine if this is a subagent event (Claude with agent_id)
                     if is_subagent_state(&state) {
-                        // Subagent event
+                        crate::ipc::debug_log("  -> routing to subagent");
                         let pane_id = state.tmux_pane.clone();
                         let agent_id = state.agent_id().unwrap().to_string();
                         app.merge_subagent_state(pane_id, agent_id, state);
                     } else {
-                        // Main agent event
                         use crate::agent::state::AgentStatus;
                         if state.status() == AgentStatus::Ended {
+                            crate::ipc::debug_log("  -> removing ended state");
                             app.agent_states.remove(&state.tmux_pane);
                         } else if let Some(existing) = app.agent_states.get(&state.tmux_pane) {
+                            crate::ipc::debug_log(format!(
+                                "  -> merging with existing (existing tools={})",
+                                existing.active_tools().len(),
+                            ));
                             let merged = state.merge_with(existing);
+                            crate::ipc::debug_log(format!(
+                                "  -> merged result: status={:?} tools={}",
+                                merged.status(),
+                                merged.active_tools().len(),
+                            ));
                             app.agent_states.insert(merged.tmux_pane.clone(), merged);
                         } else {
-                            // New agent
+                            crate::ipc::debug_log("  -> new agent state");
                             app.agent_states.insert(state.tmux_pane.clone(), state);
                         }
                     }
+                    let before_tools = app
+                        .sessions
+                        .iter()
+                        .flat_map(|s| s.windows.iter())
+                        .flat_map(|w| w.panes.iter())
+                        .filter(|p| p.pane_id == "%305")
+                        .flat_map(|p| p.agent_state.as_ref().map(|a| a.active_tools().len()))
+                        .next()
+                        .unwrap_or(999);
                     app.merge_agent_states();
+                    let after_tools = app
+                        .sessions
+                        .iter()
+                        .flat_map(|s| s.windows.iter())
+                        .flat_map(|w| w.panes.iter())
+                        .filter(|p| p.pane_id == "%305")
+                        .flat_map(|p| p.agent_state.as_ref().map(|a| a.active_tools().len()))
+                        .next()
+                        .unwrap_or(999);
+                    crate::ipc::debug_log(format!(
+                        "  -> after merge_agent_states: pane %305 tools before={} after={} sessions_in_tree={}",
+                        before_tools, after_tools, app.sessions.len(),
+                    ));
                 }
             }
         }

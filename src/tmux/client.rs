@@ -61,14 +61,41 @@ fn build_tree(raw: &str, agent_states: &HashMap<String, AgentState>) -> Vec<Tmux
         let pane_current_path = fields[9].to_string();
         let pane_title = fields[10].to_string();
 
-        let agent_state = agent_states.get(&pane_id).cloned().or_else(|| {
-            detected_agent_state(
-                &pane_id,
-                &pane_current_command,
-                Some(&window_name),
-                Some(&pane_title),
-            )
-        });
+        let agent_state = agent_states
+            .get(&pane_id)
+            .and_then(|state| {
+                // Verify the pane still hosts an agent process.
+                // If the agent is no longer running, don't attach stale state.
+                let still_active = match state.source() {
+                    crate::agent::state::AgentSource::OpenCode => {
+                        // OpenCode tools temporarily change the pane command,
+                        // so check pane_title (which persists) instead.
+                        crate::agent::detect::is_opencode_pane(
+                            Some(&window_name),
+                            Some(&pane_title),
+                        )
+                    }
+                    _ => detect_agent_source(
+                        &pane_current_command,
+                        Some(&window_name),
+                        Some(&pane_title),
+                    )
+                    .is_some(),
+                };
+                if still_active {
+                    Some(state.clone())
+                } else {
+                    None
+                }
+            })
+            .or_else(|| {
+                detected_agent_state(
+                    &pane_id,
+                    &pane_current_command,
+                    Some(&window_name),
+                    Some(&pane_title),
+                )
+            });
 
         let pane = TmuxPane {
             pane_id,
@@ -329,7 +356,7 @@ mod tests {
 
     #[test]
     fn test_build_tree_with_agent_state() {
-        let raw = "main\t1\t0\tclaude\t1\t%0\t0\tnode\t1\t/project\t\n";
+        let raw = "main\t1\t0\tclaude\t1\t%0\t0\tclaude\t1\t/project\t\n";
         let mut agents = HashMap::new();
         agents.insert(
             "%0".to_string(),
@@ -413,8 +440,129 @@ mod tests {
     }
 
     #[test]
-    fn test_build_tree_empty_input() {
-        let tree = build_tree("", &HashMap::new());
-        assert!(tree.is_empty());
+    fn test_stale_opencode_state_cleaned_up() {
+        // OpenCode process exited: pane runs bash with plain title → stale state removed
+        let raw = "main\t1\t0\tbash\t1\t%0\t0\tbash\t1\t/home\tzsh\n";
+        let mut agents = HashMap::new();
+        agents.insert(
+            "%0".to_string(),
+            AgentState::new(
+                "%0".to_string(),
+                AgentData::OpenCode(OpenCodeState {
+                    session_id: Some("ses_stale".to_string()),
+                    status: AgentStatus::Running,
+                    event_type: Some("tool.completed".to_string()),
+                    event_emoji: None,
+                    tool_name: None,
+                    tool_detail: None,
+                    active_tools: Vec::new(),
+                    recent_tools: Vec::new(),
+                    is_busy: false,
+                }),
+            ),
+        );
+        let tree = build_tree(raw, &agents);
+        let pane = &tree[0].windows[0].panes[0];
+        assert!(
+            pane.agent_state.is_none(),
+            "stale OpenCode state should be cleaned up when pane no longer shows OC"
+        );
+    }
+
+    #[test]
+    fn test_opencode_state_retained_during_tool() {
+        // Tool (bash) is running, but pane title still shows "OC | ..." → state retained
+        let raw = "main\t1\t0\tbash\t1\t%0\t0\tbash\t1\t/home\tOC | Greeting\n";
+        let mut agents = HashMap::new();
+        agents.insert(
+            "%0".to_string(),
+            AgentState::new(
+                "%0".to_string(),
+                AgentData::OpenCode(OpenCodeState {
+                    session_id: Some("ses_active".to_string()),
+                    status: AgentStatus::Running,
+                    event_type: Some("tool.running".to_string()),
+                    event_emoji: Some("🔧".to_string()),
+                    tool_name: Some("bash".to_string()),
+                    tool_detail: None,
+                    active_tools: Vec::new(),
+                    recent_tools: Vec::new(),
+                    is_busy: true,
+                }),
+            ),
+        );
+        let tree = build_tree(raw, &agents);
+        let pane = &tree[0].windows[0].panes[0];
+        assert!(
+            pane.agent_state.is_some(),
+            "OpenCode state should be retained during tool execution"
+        );
+        assert_eq!(
+            pane.agent_state.as_ref().unwrap().status(),
+            AgentStatus::Running
+        );
+    }
+
+    #[test]
+    fn test_stale_claude_state_cleaned_up() {
+        // Claude exited: pane runs bash → stale Claude state removed
+        let raw = "main\t1\t0\tbash\t1\t%0\t0\tbash\t1\t/project\t\n";
+        let mut agents = HashMap::new();
+        agents.insert(
+            "%0".to_string(),
+            AgentState::new(
+                "%0".to_string(),
+                AgentData::Claude(ClaudeState {
+                    session_id: Some("ses_stale".to_string()),
+                    agent_id: None,
+                    status: AgentStatus::Running,
+                    hook_event_name: "PreToolUse".to_string(),
+                    event_emoji: "🔧".to_string(),
+                    tool_name: None,
+                    tool_detail: None,
+                    active_tools: Vec::new(),
+                    recent_tools: Vec::new(),
+                    failure_detail: None,
+                }),
+            ),
+        );
+        let tree = build_tree(raw, &agents);
+        let pane = &tree[0].windows[0].panes[0];
+        assert!(
+            pane.agent_state.is_none(),
+            "stale Claude state should be cleaned up when pane no longer runs claude"
+        );
+    }
+
+    #[test]
+    fn test_claude_state_retained_when_command_matches() {
+        // Claude is still running → state retained
+        let raw = "main\t1\t0\tclaude\t1\t%0\t0\tclaude\t1\t/project\t\n";
+        let mut agents = HashMap::new();
+        agents.insert(
+            "%0".to_string(),
+            AgentState::new(
+                "%0".to_string(),
+                AgentData::Claude(ClaudeState {
+                    session_id: Some("ses_active".to_string()),
+                    agent_id: None,
+                    status: AgentStatus::Running,
+                    hook_event_name: "PreToolUse".to_string(),
+                    event_emoji: "🔧".to_string(),
+                    tool_name: None,
+                    tool_detail: None,
+                    active_tools: Vec::new(),
+                    recent_tools: Vec::new(),
+                    failure_detail: None,
+                }),
+            ),
+        );
+        let tree = build_tree(raw, &agents);
+        let pane = &tree[0].windows[0].panes[0];
+        assert!(pane.agent_state.is_some());
+        assert_eq!(
+            pane.agent_state.as_ref().unwrap().status(),
+            AgentStatus::Running
+        );
     }
 }

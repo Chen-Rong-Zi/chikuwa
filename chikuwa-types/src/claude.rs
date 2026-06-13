@@ -1,9 +1,10 @@
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-use super::state::{push_recent_tool, ActiveTool, AgentStatus};
+use crate::state::{push_recent_tool, ActiveTool, AgentStatus};
 
 /// Full state from Claude Code hooks.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct ClaudeState {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub session_id: Option<String>,
@@ -111,7 +112,7 @@ impl ClaudeState {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::agent::state::ToolKey;
+    use crate::state::ToolKey;
 
     fn make_state(event: &str, status: AgentStatus) -> ClaudeState {
         ClaudeState {

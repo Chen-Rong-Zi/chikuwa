@@ -1,7 +1,8 @@
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 /// Unique identifier for an in-flight tool call.
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ToolKey {
     /// Claude Code: exact match via tool_use_id
@@ -9,6 +10,7 @@ pub enum ToolKey {
     /// Codex CLI: exact match via tool_use_id
     Codex { tool_use_id: String },
     /// OpenCode: no unique ID, approximate match via name+detail
+    #[serde(rename = "opencode")]
     OpenCode {
         name: String,
         detail: Option<String>,
@@ -16,7 +18,7 @@ pub enum ToolKey {
 }
 
 /// A tool call that is currently in progress.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct ActiveTool {
     pub key: ToolKey,
     pub name: String,
@@ -43,7 +45,7 @@ pub fn push_recent_tool(recent_tools: &mut Vec<ActiveTool>, tool: ActiveTool) {
 }
 
 /// Which agent produced this state.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum AgentSource {
     Claude,
@@ -51,7 +53,7 @@ pub enum AgentSource {
     Codex,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum AgentStatus {
     Started,
@@ -90,16 +92,17 @@ pub trait AgentView {
 }
 
 /// Per-agent state data, tagged by source.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum AgentData {
     Claude(super::claude::ClaudeState),
+    #[serde(rename = "opencode")]
     OpenCode(super::opencode_state::OpenCodeState),
     Codex(super::codex_state::CodexState),
 }
 
 /// Top-level agent state tracked by the TUI.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct AgentState {
     pub tmux_pane: String,
     pub updated_at: u64,
@@ -249,7 +252,7 @@ fn now() -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::agent::claude::ClaudeState;
+    use crate::claude::ClaudeState;
 
     #[test]
     fn test_agent_status_serialize() {
@@ -350,7 +353,7 @@ mod tests {
     fn test_codex_agent_state_roundtrip_json() {
         let state = AgentState::new(
             "%1".to_string(),
-            AgentData::Codex(crate::agent::codex_state::CodexState::new(
+            AgentData::Codex(crate::codex_state::CodexState::new(
                 "SessionStart",
                 AgentStatus::Started,
                 "🚀",

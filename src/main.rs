@@ -1,17 +1,6 @@
-mod agent;
-mod app;
-mod codex_hook;
-mod event;
-mod git;
-mod hook;
-mod ipc;
-mod opencode;
-mod persist;
-mod tmux;
-mod ui;
-mod usage;
-
 use clap::{Parser, Subcommand};
+
+use chikuwa::{app, codex_hook, hook, ipc, opencode};
 
 #[derive(Parser)]
 #[command(name = "chikuwa", about = "tmux AI Agent monitor TUI", version)]

@@ -3,11 +3,21 @@
  *
  * Integrates OpenCode with chikuwa TUI for agent state tracking.
  * Sends agent state updates via IPC to the chikuwa daemon.
+ *
+ * Type definitions are auto-generated from Rust structs via
+ * `cargo run --bin gen-contract -- generate-contract`.
+ * Keep the contract in sync by running that command after changing
+ * any agent state types in the Rust codebase.
  */
 
 import { appendFileSync, mkdirSync, readdirSync } from "fs";
 import { join } from "path";
 import { createConnection } from "net";
+
+import type { AgentState, ActiveTool } from "./opencode-types";
+
+/** The OpenCode-specific variant of AgentData (type: "opencode") */
+type OpenCodeData = Extract<AgentState["data"], { type: "opencode" }>;
 
 const LOG_FILE = "/tmp/chikuwa-opencode-plugin.log";
 const RAW_LOG_FILE = "/tmp/chikuwa.raw.log";
@@ -34,30 +44,7 @@ const logRaw = (data: unknown) => {
 	}
 };
 
-interface OpenCodeState {
-	session_id?: string;
-	status: "started" | "running" | "waiting" | "permission" | "ended";
-	event_type?: string;
-	event_emoji?: string;
-	tool_name?: string;
-	tool_detail?: string;
-	active_tools: ActiveTool[];
-	is_busy: boolean;
-}
 
-interface AgentState {
-	tmux_pane: string;
-	updated_at: number;
-	data: {
-		type: "opencode";
-	} & OpenCodeState;
-}
-
-interface ActiveTool {
-	key: { type: "opencode"; name: string; detail?: string };
-	name: string;
-	detail?: string;
-}
 
 const now = () => Math.floor(Date.now() / 1000);
 const getTmuxPane = () => process.env.TMUX_PANE || "";
@@ -71,13 +58,10 @@ const appendAgentState = (state: AgentState) => {
 	}
 };
 
-const makeState = (tmux_pane: string, opencode: Omit<OpenCodeState, never>): AgentState => ({
+const makeState = (tmux_pane: string, data: OpenCodeData): AgentState => ({
 	tmux_pane,
 	updated_at: now(),
-	data: {
-		type: "opencode",
-		...opencode,
-	},
+	data,
 });
 
 const sendToIpc = async (state: AgentState) => {
@@ -89,15 +73,22 @@ const sendToIpc = async (state: AgentState) => {
 			return;
 		}
 		const json = JSON.stringify(state) + "\n";
+		log("Sending IPC to sockets", { count: socketFiles.length, files: socketFiles, jsonLen: json.length, jsonPreview: json.substring(0, 300) });
 		// Send to all socket files (like Rust broadcast_state does).
 		// Stale sockets will fail silently — only live TUI instances receive the message.
 		for (const socketFile of socketFiles) {
 			const socketPath = join(CHIKUWA_STATE_DIR, socketFile);
 			const client = createConnection(socketPath, () => {
-				client.write(json);
-				client.end();
+				log("IPC raw json length", { socket: socketFile, len: json.length, full: json.substring(0, 500) });
+				client.write(json, () => {
+					client.end(() => {
+						log("IPC wrote to", { socket: socketFile, tool: state.data.tool_name, status: state.data.status });
+					});
+				});
 			});
-			client.on("error", () => {});
+			client.on("error", (err: any) => {
+				log("IPC connection error", { socket: socketFile, error: String(err) });
+			});
 		}
 	} catch (e) {
 		log("Failed to send IPC", { error: String(e) });

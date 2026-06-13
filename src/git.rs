@@ -36,6 +36,12 @@ pub struct GitInfoCache {
     entries: HashMap<PathBuf, CacheEntry>,
 }
 
+impl Default for GitInfoCache {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl GitInfoCache {
     pub fn new() -> Self {
         Self {

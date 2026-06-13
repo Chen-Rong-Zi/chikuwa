@@ -1,9 +1,10 @@
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-use super::state::{push_recent_tool, ActiveTool, AgentStatus};
+use crate::state::{push_recent_tool, ActiveTool, AgentStatus};
 
 /// Full state from Codex CLI hooks.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct CodexState {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub session_id: Option<String>,
@@ -131,7 +132,7 @@ impl CodexState {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::agent::state::{ActiveTool, AgentStatus, ToolKey};
+    use crate::state::{ActiveTool, AgentStatus, ToolKey};
 
     fn make_state(
         event: &str,
