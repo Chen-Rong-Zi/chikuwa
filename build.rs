@@ -16,7 +16,7 @@ fn generate_contract() {
     let manifest = Path::new(env!("CARGO_MANIFEST_DIR"));
 
     // Generate JSON Schema
-    let schema_path = manifest.join("opencode-protocol.json");
+    let schema_path = manifest.join("schemas/opencode-protocol.json");
     if should_write(&schema_path, &schema_json) {
         std::fs::write(&schema_path, &schema_json).unwrap();
         println!("cargo:warning=Generated opencode-protocol.json");
