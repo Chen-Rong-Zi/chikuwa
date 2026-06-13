@@ -18,6 +18,7 @@ pub const ICON_WAITING: &str = "\u{f28b}"; //
 pub const ICON_PERMISSION: &str = "\u{f071}"; //
 pub const ICON_STARTED: &str = "\u{f04b}"; //
 pub const ICON_CLAUDE: &str = "\u{f06a9}"; // 󰚩
+pub const ICON_OPENCODE: &str = "\u{2600}"; // ☀
 pub const ICON_NEOVIM: &str = "\u{e7c5}"; //
 pub const ICON_TERMINAL: &str = "\u{f489}"; //
 pub const ICON_WINDOW: &str = "\u{f10aa}"; // 󱂪

@@ -7,6 +7,7 @@
 
 import { appendFileSync, mkdirSync, readdirSync } from "fs";
 import { join } from "path";
+import { createConnection } from "net";
 
 const LOG_FILE = "/tmp/chikuwa-opencode-plugin.log";
 const RAW_LOG_FILE = "/tmp/chikuwa.raw.log";
@@ -79,7 +80,7 @@ const makeState = (tmux_pane: string, opencode: Omit<OpenCodeState, never>): Age
 	},
 });
 
-const sendToIpc = async ($: any, state: AgentState) => {
+const sendToIpc = async (state: AgentState) => {
 	try {
 		const files = readdirSync(CHIKUWA_STATE_DIR);
 		const socketFiles = files.filter(f => f.endsWith(".sock"));
@@ -87,12 +88,16 @@ const sendToIpc = async ($: any, state: AgentState) => {
 			log("No socket file found");
 			return;
 		}
-		const json = JSON.stringify(state);
+		const json = JSON.stringify(state) + "\n";
 		// Send to all socket files (like Rust broadcast_state does).
 		// Stale sockets will fail silently — only live TUI instances receive the message.
 		for (const socketFile of socketFiles) {
 			const socketPath = join(CHIKUWA_STATE_DIR, socketFile);
-			await $`echo ${json} | nc -U ${socketPath}`.nothrow();
+			const client = createConnection(socketPath, () => {
+				client.write(json);
+				client.end();
+			});
+			client.on("error", () => {});
 		}
 	} catch (e) {
 		log("Failed to send IPC", { error: String(e) });
@@ -133,7 +138,38 @@ export const ChikuwaPlugin = async ({ client, directory, $ }: { client: any; dir
 
 	const sendState = async (state: AgentState) => {
 		appendAgentState(state);
-		await sendToIpc($, state);
+		await sendToIpc(state);
+	};
+
+	const CRITICAL_EVENTS = new Set([
+		"session.created",
+		"session.deleted",
+		"session.status",
+		"session.idle",
+		"permission.asked",
+		"permission.replied",
+		"command.executed",
+	]);
+
+	let debounceTimer: ReturnType<typeof setTimeout> | null = null;
+	let pendingState: AgentState | null = null;
+
+	const sendStateDebounced = async (state: AgentState, eventType?: string) => {
+		if (eventType && CRITICAL_EVENTS.has(eventType)) {
+			appendAgentState(state);
+			await sendToIpc(state);
+			return;
+		}
+		pendingState = state;
+		if (debounceTimer) return;
+		debounceTimer = setTimeout(async () => {
+			debounceTimer = null;
+			if (pendingState) {
+				appendAgentState(pendingState);
+				await sendToIpc(pendingState);
+				pendingState = null;
+			}
+		}, 100);
 	};
 
 	const updateSession = (sessionId: string) => {
@@ -162,7 +198,7 @@ export const ChikuwaPlugin = async ({ client, directory, $ }: { client: any; dir
 				activeTools.push(tool);
 			}
 
-			await sendState(makeState(tmuxPane, {
+			await sendStateDebounced(makeState(tmuxPane, {
 				session_id: currentSessionId || undefined,
 				status: "running",
 				event_type: "tool.execute",
@@ -170,7 +206,7 @@ export const ChikuwaPlugin = async ({ client, directory, $ }: { client: any; dir
 				tool_detail: toolDetail,
 				active_tools: [...activeTools],
 				is_busy: true,
-			}));
+			}), "tool.execute");
 		},
 
 		// Main event handler - OpenCode sends all events through this
@@ -196,25 +232,25 @@ export const ChikuwaPlugin = async ({ client, directory, $ }: { client: any; dir
 					if (status.type === "busy" && !isBusy) {
 						isBusy = true;
 						activeTools = [];
-						await sendState(makeState(tmuxPane, {
+						await sendStateDebounced(makeState(tmuxPane, {
 							session_id: currentSessionId || undefined,
 							status: "started",
 							event_type: "session.busy",
 							event_emoji: "🚀",
 							active_tools: [],
 							is_busy: true,
-						}));
+						}), "session.status");
 					} else if (status.type === "idle" && isBusy) {
 						isBusy = false;
 						activeTools = [];
-						await sendState(makeState(tmuxPane, {
+						await sendStateDebounced(makeState(tmuxPane, {
 							session_id: currentSessionId || undefined,
 							status: "waiting",
 							event_type: "session.idle",
 							event_emoji: "💤",
 							active_tools: [],
 							is_busy: false,
-						}));
+						}), "session.status");
 					}
 					break;
 				}
@@ -223,41 +259,41 @@ export const ChikuwaPlugin = async ({ client, directory, $ }: { client: any; dir
 					log("Session idle event");
 					isBusy = false;
 					activeTools = [];
-					await sendState(makeState(tmuxPane, {
+					await sendStateDebounced(makeState(tmuxPane, {
 						session_id: currentSessionId || undefined,
 						status: "waiting",
 						event_type: "session.idle",
 						event_emoji: "💤",
 						active_tools: [],
 						is_busy: false,
-					}));
+					}), "session.idle");
 					break;
 				}
 
 				case "session.created": {
 					const newSessionId = props.session?.id || props.id || sessionId;
 					if (newSessionId) updateSession(newSessionId);
-					await sendState(makeState(tmuxPane, {
+					await sendStateDebounced(makeState(tmuxPane, {
 						session_id: newSessionId || currentSessionId || undefined,
 						status: "started",
 						event_type: "session.created",
 						event_emoji: "🚀",
 						active_tools: [],
 						is_busy: false,
-					}));
+					}), "session.created");
 					break;
 				}
 
 				case "session.deleted": {
 					if (props.sessionID === currentSessionId) {
-						await sendState(makeState(tmuxPane, {
+						await sendStateDebounced(makeState(tmuxPane, {
 							session_id: currentSessionId,
 							status: "ended",
 							event_type: "session.deleted",
 							event_emoji: "🏁",
 							active_tools: [],
 							is_busy: false,
-						}));
+						}), "session.deleted");
 						currentSessionId = "";
 						isBusy = false;
 						activeTools = [];
@@ -286,7 +322,7 @@ export const ChikuwaPlugin = async ({ client, directory, $ }: { client: any; dir
 						if (!activeTools.some(t => t.key.name === toolName && t.key.detail === toolDetail)) {
 							activeTools.push(tool);
 						}
-						await sendState(makeState(tmuxPane, {
+						await sendStateDebounced(makeState(tmuxPane, {
 							session_id: currentSessionId || undefined,
 							status: "running",
 							event_type: "tool.running",
@@ -295,7 +331,7 @@ export const ChikuwaPlugin = async ({ client, directory, $ }: { client: any; dir
 							tool_detail: toolDetail,
 							active_tools: [...activeTools],
 							is_busy: true,
-						}));
+						}), "tool.running");
 					} else if (toolStatus === "completed" || toolStatus === "error") {
 						const toolDetail = toolInput ? extractToolDetail(toolName, toolInput) : undefined;
 						// Match by key (name+detail) to correctly handle parallel tool calls
@@ -308,14 +344,14 @@ export const ChikuwaPlugin = async ({ client, directory, $ }: { client: any; dir
 							name: toolName,
 							detail: toolDetail,
 						};
-						await sendState(makeState(tmuxPane, {
+						await sendStateDebounced(makeState(tmuxPane, {
 							session_id: currentSessionId || undefined,
 							status: "running",
 							event_type: `tool.${toolStatus}`,
 							tool_name: toolName,
 							active_tools: [removingTool, ...activeTools],
 							is_busy: true,
-						}));
+						}), `tool.${toolStatus}`);
 					}
 					break;
 				}
@@ -329,7 +365,7 @@ export const ChikuwaPlugin = async ({ client, directory, $ }: { client: any; dir
 						name: "edit",
 						detail: filePath,
 					};
-					await sendState(makeState(tmuxPane, {
+					await sendStateDebounced(makeState(tmuxPane, {
 						session_id: currentSessionId || undefined,
 						status: "running",
 						event_type: "file.edited",
@@ -338,14 +374,14 @@ export const ChikuwaPlugin = async ({ client, directory, $ }: { client: any; dir
 						tool_detail: filePath,
 						active_tools: [tool],
 						is_busy: true,
-					}));
+					}), "file.edited");
 					break;
 				}
 
 				// Permission events
 				case "permission.asked":
 				case "permission.updated": {
-					await sendState(makeState(tmuxPane, {
+					await sendStateDebounced(makeState(tmuxPane, {
 						session_id: currentSessionId || undefined,
 						status: "permission",
 						event_type: "permission.asked",
@@ -353,19 +389,19 @@ export const ChikuwaPlugin = async ({ client, directory, $ }: { client: any; dir
 						tool_detail: props.permission?.tool || props.permission?.type,
 						active_tools: [...activeTools],
 						is_busy: false,
-					}));
+					}), "permission.asked");
 					break;
 				}
 
 				case "permission.replied": {
 					if (isBusy) {
-						await sendState(makeState(tmuxPane, {
+						await sendStateDebounced(makeState(tmuxPane, {
 							session_id: currentSessionId || undefined,
 							status: "running",
 							event_type: "permission.replied",
 							active_tools: [...activeTools],
 							is_busy: true,
-						}));
+						}), "permission.replied");
 					}
 					break;
 				}
@@ -374,7 +410,7 @@ export const ChikuwaPlugin = async ({ client, directory, $ }: { client: any; dir
 				case "command.executed": {
 					const command = props.command;
 					if (Array.isArray(command) && command[0] === "bash") {
-						await sendState(makeState(tmuxPane, {
+						await sendStateDebounced(makeState(tmuxPane, {
 							session_id: currentSessionId || undefined,
 							status: "running",
 							event_type: "command.executed",
@@ -382,7 +418,7 @@ export const ChikuwaPlugin = async ({ client, directory, $ }: { client: any; dir
 							tool_detail: command.slice(1).join(" "),
 							active_tools: [...activeTools],
 							is_busy: true,
-						}));
+						}), "command.executed");
 					}
 					break;
 				}

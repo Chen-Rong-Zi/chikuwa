@@ -9,7 +9,7 @@ use unicode_width::UnicodeWidthStr;
 
 use crate::agent::detect::detect_agent_source;
 use crate::agent::state::ActiveTool;
-use crate::agent::state::{AgentState, AgentStatus, AgentView};
+use crate::agent::state::{AgentSource, AgentState, AgentStatus, AgentView};
 use crate::agent::{SubagentInfo, SubagentStatus};
 use crate::git::GitInfo;
 use crate::tmux::types::{TmuxPane, TmuxSession};
@@ -1428,13 +1428,21 @@ fn truncate_spans(spans: &mut Vec<Span<'static>>, max_width: usize) {
 }
 
 /// Choose the icon for a Window or Pane item.
-/// Priority: agent (claude/opencode) > neovim > shell > multi-pane window. Fallback: terminal.
+/// Priority: agent source > neovim > shell > multi-pane window. Fallback: terminal.
 fn item_icon(
+    agent_source: Option<AgentSource>,
     agent_state: Option<&AgentState>,
     command: Option<&str>,
     window_name: Option<&str>,
     has_multiple_panes: bool,
 ) -> &'static str {
+    if let Some(source) = agent_source {
+        return match source {
+            AgentSource::OpenCode => theme::ICON_OPENCODE,
+            AgentSource::Claude => theme::ICON_CLAUDE,
+            AgentSource::Codex => theme::ICON_CLAUDE,
+        };
+    }
     if let Some(cmd) = command {
         if agent_state.is_some() || is_agent_command(cmd, window_name) {
             return theme::ICON_CLAUDE;
@@ -1473,6 +1481,7 @@ fn render_content_spans(
             let mut spans = Vec::new();
 
             let icon = item_icon(
+                agent_state.as_ref().map(|s| s.source()),
                 agent_state.as_ref(),
                 pane_current_command.as_deref(),
                 Some(window_name.as_str()),
@@ -1525,6 +1534,7 @@ fn render_content_spans(
             ..
         } => {
             let icon = item_icon(
+                pane.agent_state.as_ref().map(|s| s.source()),
                 pane.agent_state.as_ref(),
                 Some(&pane.pane_current_command),
                 None,
