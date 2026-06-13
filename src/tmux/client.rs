@@ -8,6 +8,7 @@ use super::types::{TmuxPane, TmuxSession, TmuxWindow};
 use crate::agent::claude::ClaudeState;
 use crate::agent::codex_state::CodexState;
 use crate::agent::detect::detect_agent_source;
+use crate::agent::opencode_state::OpenCodeState;
 use crate::agent::state::{AgentData, AgentState, AgentStatus};
 
 /// Fetch all tmux sessions/windows/panes and build a tree, merging agent states.
@@ -144,7 +145,20 @@ fn detected_agent_state(
             pane_id.to_string(),
             AgentData::Codex(CodexState::new("Detected", AgentStatus::Waiting, "💤")),
         )),
-        crate::agent::state::AgentSource::OpenCode => None,
+        crate::agent::state::AgentSource::OpenCode => Some(AgentState::new(
+            pane_id.to_string(),
+            AgentData::OpenCode(OpenCodeState {
+                session_id: None,
+                status: AgentStatus::Waiting,
+                event_type: Some("Detected".to_string()),
+                event_emoji: Some("💤".to_string()),
+                tool_name: None,
+                tool_detail: None,
+                active_tools: Vec::new(),
+                recent_tools: Vec::new(),
+                is_busy: false,
+            }),
+        )),
     }
 }
 
