@@ -16,29 +16,45 @@ The `RUSTUP_TOOLCHAIN` env var may override `rust-toolchain.toml`. If you hit ve
 ## Project Structure
 
 ```
-src/
-  main.rs              # CLI entry (clap): TUI / hook / opencode-hook / notify subcommands
-  app.rs               # TUI app state, async event loop, rendering orchestration
-  event.rs             # Keyboard/mouse/timer event handling (crossterm)
-  hook.rs              # `chikuwa hook`: stdin JSON → AgentState → IPC
-  opencode.rs          # `chikuwa opencode-hook`: OpenCode hook handler
-  ipc.rs               # Unix domain socket IPC (client send_state/send_notify, server listener)
-  git.rs               # Git branch/PR/repo info with per-path TTL caching
-  usage.rs             # Claude API usage polling (OAuth, exponential backoff)
-  agent/
-    mod.rs
-    state.rs           # AgentState, AgentStatus enum, ToolInfo, serialization
-  tmux/
-    mod.rs
-    client.rs          # tmux command execution, tree building, hook registration
-    types.rs           # TmuxSession / TmuxWindow / TmuxPane structs
-  ui/
-    mod.rs
-    tree.rs            # Tree view: flatten, render, navigate, mouse hit-test
-    status_bar.rs      # Bottom bar: agent counts + usage gauges
-    theme.rs           # 3-color palette, NerdFont icons, status styling
+crates/
+  chikuwa/
+    src/
+      main.rs              # CLI entry (clap): TUI / hook / opencode-hook / notify subcommands
+      lib.rs               # Library crate root
+      app.rs               # TUI app state, async event loop, rendering orchestration
+      event.rs             # Keyboard/mouse/timer event handling (crossterm)
+      hook.rs              # `chikuwa hook`: stdin JSON → AgentState → IPC
+      opencode.rs          # `chikuwa opencode-hook`: OpenCode hook handler
+      ipc.rs               # Unix domain socket IPC
+      git.rs               # Git branch/PR/repo info with per-path TTL caching
+      usage.rs             # Claude API usage polling (OAuth, exponential backoff)
+      agent/
+        mod.rs
+        detect.rs          # Agent source detection from tmux pane info
+        parser.rs          # Hook event parsers (Claude/Codex/OpenCode)
+        subagent.rs        # Subagent tracking
+      tmux/
+        mod.rs
+        client.rs          # tmux command execution, tree building, hook registration
+        types.rs           # TmuxSession / TmuxWindow / TmuxPane structs
+      ui/
+        mod.rs
+        tree.rs            # Tree view: flatten, render, navigate, mouse hit-test
+        status_bar.rs      # Bottom bar: agent counts + usage gauges
+        theme.rs           # 3-color palette, NerdFont icons, status styling
+    build.rs               # Build script: auto-generates contract files
+  chikuwa-types/
+    src/
+      lib.rs
+      state.rs             # AgentState, AgentStatus, AgentData, ToolKey etc.
+      claude.rs            # ClaudeState + merge logic
+      opencode_state.rs    # OpenCodeState + merge logic
+      codex_state.rs       # CodexState + merge logic
+schemas/
+  opencode-protocol.json   # JSON Schema contract (auto-generated)
 plugins/
-  chikuwa.ts           # OpenCode TUI plugin for agent state tracking
+  chikuwa.ts               # OpenCode TUI plugin for agent state tracking
+  opencode-types.ts        # TypeScript types (auto-generated)
 ```
 
 ## Architecture

@@ -1,6 +1,6 @@
 /target
-chikuwa-types/target/
-chikuwa-types/Cargo.lock
+crates/*/target/
+crates/*/Cargo.lock
 /result
 /worktrees/
 /.worktrees/

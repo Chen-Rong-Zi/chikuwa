@@ -13,10 +13,15 @@ fn generate_contract() {
     let schema: RootSchema = schema_for!(chikuwa_types::state::AgentState);
     let schema_json = serde_json::to_string_pretty(&schema).unwrap();
 
-    let manifest = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let workspace_root = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .unwrap()
+        .parent()
+        .unwrap()
+        .to_path_buf();
 
     // Generate JSON Schema
-    let schema_path = manifest.join("schemas/opencode-protocol.json");
+    let schema_path = workspace_root.join("schemas/opencode-protocol.json");
     if should_write(&schema_path, &schema_json) {
         std::fs::write(&schema_path, &schema_json).unwrap();
         println!("cargo:warning=Generated opencode-protocol.json");
@@ -24,7 +29,7 @@ fn generate_contract() {
 
     // Generate TypeScript
     let ts_types = generate_typescript_types(&schema);
-    let ts_path = manifest.join("plugins/opencode-types.ts");
+    let ts_path = workspace_root.join("plugins/opencode-types.ts");
     if should_write(&ts_path, &ts_types) {
         std::fs::write(&ts_path, &ts_types).unwrap();
         println!("cargo:warning=Generated plugins/opencode-types.ts");
