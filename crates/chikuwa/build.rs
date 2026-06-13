@@ -21,7 +21,7 @@ fn generate_contract() {
         .to_path_buf();
 
     // Generate JSON Schema
-    let schema_path = workspace_root.join("schemas/opencode-protocol.json");
+    let schema_path = workspace_root.join("agent/opencode/schemas/opencode-protocol.json");
     if should_write(&schema_path, &schema_json) {
         std::fs::write(&schema_path, &schema_json).unwrap();
         println!("cargo:warning=Generated opencode-protocol.json");
@@ -29,7 +29,7 @@ fn generate_contract() {
 
     // Generate TypeScript
     let ts_types = generate_typescript_types(&schema);
-    let ts_path = workspace_root.join("plugins/opencode-types.ts");
+    let ts_path = workspace_root.join("agent/opencode/plugins/opencode-types.ts");
     if should_write(&ts_path, &ts_types) {
         std::fs::write(&ts_path, &ts_types).unwrap();
         println!("cargo:warning=Generated plugins/opencode-types.ts");

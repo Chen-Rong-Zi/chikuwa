@@ -1,7 +1,7 @@
 /target
 crates/*/target/
 crates/*/Cargo.lock
-plugins/opencode-types.ts
+agent/opencode/plugins/opencode-types.ts
 /result
 /worktrees/
 /.worktrees/

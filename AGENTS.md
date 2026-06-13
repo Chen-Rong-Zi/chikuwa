@@ -50,11 +50,13 @@ crates/
       claude.rs            # ClaudeState + merge logic
       opencode_state.rs    # OpenCodeState + merge logic
       codex_state.rs       # CodexState + merge logic
-schemas/
-  opencode-protocol.json   # JSON Schema contract (auto-generated)
-plugins/
-  chikuwa.ts               # OpenCode TUI plugin for agent state tracking
-  opencode-types.ts        # TypeScript types (auto-generated)
+agent/
+  opencode/
+    schemas/
+      opencode-protocol.json   # JSON Schema contract (auto-generated)
+    plugins/
+      chikuwa.ts               # OpenCode TUI plugin for agent state tracking
+      opencode-types.ts        # TypeScript types (auto-generated)
 ```
 
 ## Architecture
@@ -182,7 +184,7 @@ For richer integration, install the chikuwa plugin:
 
 ```bash
 mkdir -p ~/.config/opencode/plugins
-ln -s /path/to/chikuwa/plugins/chikuwa.ts ~/.config/opencode/plugins/chikuwa.ts
+ln -s /path/to/chikuwa/agent/opencode/plugins/chikuwa.ts ~/.config/opencode/plugins/chikuwa.ts
 ```
 
 The plugin tracks all OpenCode events:
